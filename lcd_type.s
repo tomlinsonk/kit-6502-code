@@ -13,8 +13,8 @@ RW = %00000100
 RS = %00000010
 
 ; VIA interrupt bits
-CA1 = %00000010
-IE = %10000000
+CA1_INT = %00000010
+INT_ENABLE = %10000000
 CA1_RISING = %00000001
 
 ; LCD instructions
@@ -80,7 +80,7 @@ reset:
   lda #CA1_RISING                 ; keyboard interrupt on rising edge
   sta PCR
 
-  lda #(CA1 | IE)                 ; enable interrupts on CA1 (keyboard)
+  lda #(CA1_INT | INT_ENABLE)     ; enable interrupts on CA1 (keyboard)
   sta IER
 
   lda #%11111110                  ; setup LCD pins as output

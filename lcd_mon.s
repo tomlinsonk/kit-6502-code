@@ -13,8 +13,8 @@ RW = %00000100
 RS = %00000010
 
 ; VIA interrupt bits
-CA1 = %00000010
-IE = %10000000
+CA1_INT = %00000010
+INT_ENABLE = %10000000
 CA1_RISING = %00000001
 
 ; LCD instructions
@@ -74,7 +74,7 @@ KB_BUFFER = $f0                     ; sixteen bytes (f0-ff)
 ; other RAM addresses
 
 
-  .org $8000                        ; ROM starts at address $8000
+  .org $8000                          ; ROM starts at address $8000
 
 
 jump_table:
@@ -84,7 +84,7 @@ jump_table:
   jmp lcd_instruction             ; 8009
 
 start_msg:
-  .string "LCD Mon by KT"
+  .string "LCDMon by KT"
 
 reset:
   cli
@@ -93,7 +93,7 @@ reset:
   lda #CA1_RISING                 ; keyboard interrupt on rising edge
   sta PCR
 
-  lda #(CA1 | IE)                 ; enable interrupts on CA1 (keyboard)
+  lda #(CA1_INT | INT_ENABLE)     ; enable interrupts on CA1 (keyboard)
   sta IER
 
   lda #%11111110                  ; setup LCD pins as output
@@ -293,7 +293,7 @@ enter_pressed:
   ldx #0                          ; load offset of 0 for indirect indexed addressing / offset for writing
 
   lda TEXT_BUFFER
-  beq enter_return               ; if the buffer is empty, do nothing
+  beq enter_return                ; if the buffer is empty, do nothing
 
   lda #CLEAR_DISPLAY
   jsr lcd_instruction             ; clear display
@@ -353,7 +353,7 @@ enter_return:
   plx                             ; restore x
   jmp update_read_ptr
 
-write_byte:                       ; write data to MON_ADDR, starting with the byte at TEXT_BUFFER+y+1 (TEXT_BUFFER+y is ;). x initialzed to 0
+write_byte:                         ; write data to MON_ADDR, starting with the byte at TEXT_BUFFER+y+1 (TEXT_BUFFER+y is ;). x initialzed to 0
   iny
   lda TEXT_BUFFER,y               ; load the next char to check if it's non-null
   beq enter_reset                 ; if it's null, done writing
@@ -483,7 +483,7 @@ div_after_save:
   pla
   rts
 
-lcd_read_addr:                     ; read the LCD address counter into A
+lcd_read_addr:                      ; read the LCD address counter into A
   lda #%00001110                  ; setup LCD data bits as input
   sta DDB
 
@@ -545,7 +545,7 @@ lcd_busy:
   pla
   rts
 
-lcd_instruction:                  ; sends the byte in register A
+lcd_instruction:                    ; sends the byte in register A
   jsr lcd_wait
   pha                             ; store on stack
   and #%11110000                  ; discard low nibble
@@ -642,7 +642,7 @@ write_dec_loop:
   rts
 
 
-lcd_write_hex:                    ; write the number in reg A to the LCD
+lcd_write_hex:                      ; write the number in reg A to the LCD
   pha                             ; stash number on stack
 
   ror
@@ -696,7 +696,7 @@ clear_tb_loop:
   rts
 
 
-parse_hex_byte:                   ; parse the hex byte (capitalized) ascii number starting at TEXT_BUFFER,y and store the result in A. Also increments y
+parse_hex_byte:                     ; parse the hex byte (capitalized) ascii number starting at TEXT_BUFFER,y and store the result in A. Also increments y
   lda TEXT_BUFFER,y               ; load the first symbol
   jsr parse_hex_char              ; parse it
 
@@ -714,7 +714,7 @@ parse_hex_byte:                   ; parse the hex byte (capitalized) ascii numbe
   rts
 
 
-parse_hex_char:                   ; parse the hex char (capitalized) in A, store the result in A
+parse_hex_char:                     ; parse the hex char (capitalized) in A, store the result in A
   cmp #"A"                        ; check if it's a letter
   bcs parse_letter
   sec
