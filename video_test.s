@@ -87,12 +87,12 @@ reset:
   lda #" "
 
 loop:
-  jsr write_ascii
+  jsr vid_write_ascii
   iny
   bne loop
 
 loop2:
-  jsr write_ascii
+  jsr vid_write_ascii
   iny
   bne loop2
 
@@ -100,7 +100,7 @@ loop2:
 loop3:
   lda message,x
   beq done
-  jsr write_ascii
+  jsr vid_write_ascii
   inx
   jmp loop3
 

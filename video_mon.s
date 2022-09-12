@@ -66,6 +66,7 @@ KX_RIGHT = $74
 
 ; Video addresses
 VRAM = $7000
+VRAM_INPUT = $71e0
 VIDEO_START_LO = $00
 VIDEO_START_HI = $70
 VIDEO_END_LO = $FF
@@ -88,16 +89,23 @@ KB_FLAGS = $0f                      ; one byte
 NIBBLE_STASH = $10                  ; one byte
 VIDEO_PTR = $11                     ; two bytes
 CURSOR_BLINK_COUNT = $13            ; one byte
-TEXT_PTR = $14                      ; two bytes  = text pointer offset from 7000, but from 0200
+TEXT_PTR = $14                      ; one byte
+VIDEO_PTR_STASH = $15               ; two bytes
+MON_ADDR = $17
 
+
+TEXT_BUFFER = $a0                   ; 32 bytes (a0-bf)
 KB_BUFFER = $f0                     ; sixteen bytes (f0-ff)
 
 ; other RAM addresses
-TEXT_BUFFER = $0200                 ; 512 bytes (0200-03ff)
-
 
 
   .org $8000                          ; ROM starts at address $8000
+
+jump_table:
+  jmp reset                       ; 8000
+  jmp vid_write_ascii             ; 8003
+  jmp inc_vid_ptr                 ; 8006
 
 reset:
   cli
@@ -119,18 +127,7 @@ reset:
   stz KB_READ_PTR
   stz KB_WRITE_PTR
 
-
-  stz VIDEO_PTR                   ; initialize video pointer to $7000
-  lda #$70
-  sta VIDEO_PTR+1
-
   stz CURSOR_BLINK_COUNT          ; initialize cursor blink counter
-
-  stz TEXT_PTR                    ; reset text pointer to $0200
-  lda #$02
-  sta TEXT_PTR+1
-
-  jsr clear_text_buffer           ; clear the text buffer
 
   lda #$ff
   sta T1_LO                       ; write all 1s to timer 1 lo
@@ -148,9 +145,8 @@ fill_blank2:
   inx
   bne fill_blank2                 ; second loop: 256 times
 
-  stz VIDEO_PTR                   ; reset video pointer to $7000
-  lda #$70
-  sta VIDEO_PTR+1
+  jsr reset_prompt                ; write prompt, clear text buffer, place pointers appropriately
+
 
 loop:                               ; main loop
   sei                             ; disable interrupts
@@ -159,8 +155,8 @@ loop:                               ; main loop
   cli                             ; reenable interrupts
   bne key_pressed                 ; if read != write, a key has been pressed. handle it
 
-  ldy #0
-  lda (TEXT_PTR),y                ; load character under cursor
+  ldy TEXT_PTR
+  lda TEXT_BUFFER,y               ; load character under cursor
   bbr3 CURSOR_BLINK_COUNT,write_cursor    ; if bit 3 of blink count is 0, turn off cursor
   lda #CURSOR_ON                  ; otherwise, load cursor char
 write_cursor:
@@ -196,28 +192,31 @@ key_pressed:
   beq esc_pressed
 
   cpy #K_ENTER                    ; check for enter press
-  beq enter_pressed
+  beq enter_pressed_jmp
 
   cpy #K_BACKSPACE                ; check for backspace
   beq backspace_pressed_jmp
+
+  lda TEXT_PTR                    ; check if we are at the right of the line.
+  cmp #30
+  beq update_read_ptr             ; if so, don't allow more typing
 
   lda #(R_SHIFT_DOWN | L_SHIFT_DOWN)
   and KB_FLAGS                    ; check if either shift is down
   bne shift_down
 
   lda keymap,y                    ; load corresponding ascii into A
-  jsr vid_write_ascii             ; write the pressed key to VRAM
-  ldy #0
-  sta (TEXT_PTR),y                ; save ascii to text buffer
-  jsr inc_vid_txt_ptrs
-  jmp update_read_ptr
+  jmp write_key_pressed
 
 shift_down:
   lda keymap_shifted,y            ; load shifted ascii into A
+
+write_key_pressed:
   jsr vid_write_ascii             ; write the pressed key
-  ldy #0
-  sta (TEXT_PTR),y                ; save ascii to text buffer
-  jsr inc_vid_txt_ptrs
+  ldy TEXT_PTR
+  sta TEXT_BUFFER,y               ; save ascii to text buffer
+  jsr inc_vid_ptr
+  inc TEXT_PTR
   jmp update_read_ptr
 
 set_kb_flag:
@@ -241,6 +240,9 @@ x_key_pressed_jmp:
 backspace_pressed_jmp:
   jmp backspace_pressed           ; long range jump to fix branch out of range
 
+enter_pressed_jmp:
+  jmp enter_pressed           ; long range jump to fix branch out of range
+
 extended_pressed:
   lda #EXTENDED_NXT
   jmp set_kb_flag
@@ -250,6 +252,19 @@ key_release_byte:
   lda #RELEASE_NXT
   jmp set_kb_flag
 
+
+l_shift_pressed:
+  lda #L_SHIFT_DOWN
+  jmp set_kb_flag
+
+
+r_shift_pressed:
+  lda #R_SHIFT_DOWN
+  jmp set_kb_flag
+
+
+esc_pressed:
+  jmp reset
 
 key_released:
   lda KB_FLAGS
@@ -271,50 +286,6 @@ exit_key_released:
   jmp update_read_ptr
 
 
-l_shift_pressed:
-  lda #L_SHIFT_DOWN
-  jmp set_kb_flag
-
-
-r_shift_pressed:
-  lda #R_SHIFT_DOWN
-  jmp set_kb_flag
-
-
-esc_pressed:
-  jmp reset
-
-enter_pressed:
-  ldy #0
-  lda (TEXT_PTR),y                ; load the char under the cursor
-  jsr vid_write_ascii             ; write it to the cursor position
-
-  lda #%11100000
-  and VIDEO_PTR
-  sta VIDEO_PTR                   ; reset video pointer to start of line
-
-  lda #%11100000
-  and TEXT_PTR
-  sta TEXT_PTR                    ; reset text pointer to start of line
-
-  lda #32
-  jsr add_vid_txt_ptrs            ; add 32 to video and text pointers to jump to start of next line
-
-  jmp update_read_ptr
-
-backspace_pressed:
-  ldy #0
-  lda (TEXT_PTR),y                ; load the char under the cursor
-  jsr vid_write_ascii             ; write it to the cursor position
-
-  jsr dec_vid_txt_ptrs            ; decrement video pointer
-
-  lda #0
-  sta (TEXT_PTR),y                ; save a null to the previous character
-  jsr vid_write_ascii             ; write that null to the screen
-
-  jmp update_read_ptr
-
 
 l_shift_released:
   lda KB_FLAGS
@@ -327,6 +298,97 @@ r_shift_released:
   eor #R_SHIFT_DOWN
   sta KB_FLAGS
   jmp exit_key_released
+
+
+
+
+
+
+enter_pressed:
+  phx
+  ldx #0                          ; load offset of 0 for indirect indexed addressing / offset for writing
+
+  lda #$71
+  sta VIDEO_PTR+1
+  lda #$c0
+  sta VIDEO_PTR
+
+  ldy #0                          ; start at the beginning of the text buffer
+  jsr parse_hex_byte              ; load hi hex byte into A and increment y
+  sta MON_ADDR+1                  ; store the hi byte
+  jsr vid_write_hex               ; display it in hex
+  iny                             ; increment y again to go to start of next byte
+  jsr parse_hex_byte              ; load lo hex byte into A and increment y
+  sta MON_ADDR                    ; store the lo byte
+  jsr vid_write_hex               ; display it in hex
+
+  iny                             ; increment y to go to char after addr
+  lda TEXT_BUFFER,y               ; read next char
+
+  cmp #";"                        ; check if it's ;
+  beq write_byte                  ; if so, go to write mode.
+
+  cmp #"r"                        ; check if it's r
+  bne dont_run                    ; if it's not, dont run!
+  jmp (MON_ADDR)                  ; if it is, RUN! :)
+dont_run:
+  ldy #1                          ; y is now number of bytes to print. 1 if no -
+  cmp #"-"                        ; check if next char is -
+  bne print_colon                 ; skip next line if -
+  ldy #8                          ; 8 bytes to display
+print_colon:
+  lda #":"
+  jsr vid_write_ascii             ; display colon
+  inc VIDEO_PTR
+
+print_data:
+  lda #" "
+  jsr vid_write_ascii             ; display space
+  inc VIDEO_PTR
+  lda (MON_ADDR,x)                ; load the data at address MON_ADDR into A; x is still 0
+  jsr vid_write_hex               ; display it
+  inc MON_ADDR                    ; increment address to print
+  bne addr_no_carry               ; check if 0 after incrementing (if 0, need to carry)
+  inc MON_ADDR+1                  ; if MON_ADDR became 0 after inc, need to carry to hi byte
+addr_no_carry:
+  dey                             ; decrement number of bytes left to print
+  bne print_data                  ; if it's not zero, keep printing
+
+enter_reset:
+  jsr reset_prompt
+  plx
+  jmp update_read_ptr
+
+write_byte:                       ; write data to MON_ADDR, starting with the byte at TEXT_BUFFER+y+1 (TEXT_BUFFER+y is ;). x initialzed to 0
+  iny
+  lda TEXT_BUFFER,y               ; load the next char to check if it's non-null
+  beq enter_reset                 ; if it's null, done writing
+  cmp #" "                        ; if it's space, consume it and move on
+  beq write_byte
+  jsr parse_hex_byte              ; parse the next byte, incrementing y
+  sta (MON_ADDR,x)                ; write the byte to mon addr pointer (x is 0)
+  inc MON_ADDR                    ; increment address to write to
+  bne write_byte                  ; check if 0 after incrementing (if 0, need to carry)
+  inc MON_ADDR+1                  ; if MON_ADDR became 0 after inc, need to carry to hi byte
+  jmp write_byte                  ; write next byte
+
+
+backspace_pressed:
+  ldy TEXT_PTR
+  beq return_from_x_press         ; if we're at 0 in the text buffer, can't go left
+
+  lda TEXT_BUFFER,y               ; load the char under the cursor
+  jsr vid_write_ascii             ; write it to the cursor position
+
+  jsr dec_vid_ptr                 ; decrement video pointer
+  dec TEXT_PTR
+
+  lda #0
+  ldy TEXT_PTR
+  sta TEXT_BUFFER,y               ; save a null to the previous character
+  jsr vid_write_ascii             ; write that null to the screen
+
+  jmp update_read_ptr
 
 
 x_key_pressed:
@@ -345,36 +407,37 @@ x_key_pressed:
 
   cpy #KX_LEFT
   beq left_pressed
-
+return_from_x_press:
   jmp update_read_ptr
 
 down_pressed:
-  ldy #0
-  lda (TEXT_PTR),y                ; load the char under the cursor
-  jsr vid_write_ascii             ; write it to the cursor position
-
-  lda #32
-  jsr add_vid_txt_ptrs            ; add 32 to the text and video pointers to move down one line
   jmp update_read_ptr
 
 up_pressed:
   jmp update_read_ptr
 
 right_pressed:
-  ldy #0
-  lda (TEXT_PTR),y                ; load the char under the cursor
+  ldy TEXT_PTR
+  cpy #30
+  beq return_from_x_press         ; if we're at 30ß in the text buffer, can't go right
+
+  lda TEXT_BUFFER,y               ; load the char under the cursor
   jsr vid_write_ascii             ; write it to the cursor position
 
-  jsr inc_vid_txt_ptrs            ; increment video and text pointers
+  jsr inc_vid_ptr                 ; increment video pointer
+  inc TEXT_PTR                    ; increment text pointer
   jmp update_read_ptr
 
 
 left_pressed:
-  ldy #0
-  lda (TEXT_PTR),y                ; load the char under the cursor
+  ldy TEXT_PTR
+  beq return_from_x_press         ; if we're at 0 in the text buffer, can't go left
+
+  lda TEXT_BUFFER,y               ; load the char under the cursor
   jsr vid_write_ascii             ; write it to the cursor position
 
-  jsr dec_vid_txt_ptrs            ; decrement video and text pointers
+  jsr dec_vid_ptr                 ; decrement video and text pointers
+  dec TEXT_PTR
   jmp update_read_ptr
 
 
@@ -383,7 +446,7 @@ left_pressed:
 ; write the ascii char in A to the address in VIDEO_PTR+0, +1
 ; writes upper case as inverted, assuming data bit 6 in text mode is INV
 ; also increments the video pointer and text pointer, and wraps at 512
-write_ascii:
+vid_write_ascii:
   pha
   phy
 
@@ -408,69 +471,48 @@ video_write:
 
 
 ; subroutine
-; increment the video and text pointers, wrapping from 512 to 0
-inc_vid_txt_ptrs:
-  inc TEXT_PTR                    ; increment the text pointer
+; increment the video and pointer, wrapping from 512 to 0
+inc_vid_ptr:
   inc VIDEO_PTR                   ; increment the video pointer
-  bne exit_inc_ptrs               ; check if it became 0 when incremented. If not, we're good to return
-  inc TEXT_PTR+1                  ; if it became 0, carry to hi byte of text ptr
+  bne exit_inc_ptr                ; check if it became 0 when incremented. If not, we're good to return
   inc VIDEO_PTR+1                 ; also carry to hi byte of video ptr
-  bbr1 VIDEO_PTR+1,exit_inc_ptrs  ; if 2s bit of hi byte is 0, we're good to return
+  bbr1 VIDEO_PTR+1,exit_inc_ptr   ; if 2s bit of hi byte is 0, we're good to return
   rmb1 VIDEO_PTR+1                ; otherwise, we're passing 512 chars and need to reset to 0
-  pha
-  lda #$02                        ; also reset text ptr hi byte to 02
-  sta TEXT_PTR+1
-  pla
-exit_inc_ptrs:
+exit_inc_ptr:
   rts
 
 
 ; subroutine
-; decrement the video and text pointers, wrapping from 0 to 512
-dec_vid_txt_ptrs:
+; decrement the video pointer, wrapping from 0 to 512
+dec_vid_ptr:
   pha
-  dec TEXT_PTR
   dec VIDEO_PTR                   ; decrement the video pointer
   lda #$ff
   cmp VIDEO_PTR                   ; check if we carried
   bne exit_dec_video_ptr          ; if not, good to return
-  dec TEXT_PTR+1
   dec VIDEO_PTR+1                 ; if we did carry, decrement hi byte
   lda VIDEO_PTR+1                 ; load the video pointer hi byte
   cmp #VIDEO_START_HI             ; compare with smallest valid hi byte for VRAM
   bcs exit_dec_video_ptr          ; if video pointer hi byte is >=, can return
   lda #$71                        ; otherwise, reset it to end of screen
   sta VIDEO_PTR+1
-  lda #$03
-  sta TEXT_PTR+1                  ; also reset text pointer to end of buffer
 exit_dec_video_ptr:
   pla
   rts
 
 
 ; subroutine
-; add the value in A to the the video and text pointers, wrapping from 512 to 0
-add_vid_txt_ptrs:
-  pha                             ; stash A on the stack
-  clc
-  adc TEXT_PTR                    ; add A to the text pointer
-  sta TEXT_PTR
-
-  pla                             ; retrieve A from the stack
+; add the value in A to the the video pointer, wrapping from 512 to 0
+add_vid_ptr:                        ; retrieve A from the stack
   clc
   adc VIDEO_PTR                   ; add A to the video pointer
   sta VIDEO_PTR
 
   bcc exit_add_ptrs               ; check if we need to carry. If not, we're good to return
-  inc TEXT_PTR+1                  ; if it became 0, carry to hi byte of text ptr
   inc VIDEO_PTR+1                 ; also carry to hi byte of video ptr
 
-  bbr1 VIDEO_PTR+1,exit_inc_ptrs  ; if 2s bit of hi byte is 0, we're good to return
-  rmb1 VIDEO_PTR+1                ; otherwise, we're passing 512 chars and need to reset to 0
-  pha
-  lda #$02                        ; also reset text ptr hi byte to 02
-  sta TEXT_PTR+1
-  pla
+  bbr1 VIDEO_PTR+1,exit_add_ptrs  ; if 2s bit of hi byte is 0, we're good to return
+  rmb1 VIDEO_PTR+1                ; otherwise, we're passing 512 chars and need to reset to 512
 exit_add_ptrs:
   rts
 
@@ -481,23 +523,115 @@ clear_text_buffer:
   pha
   phx
 
-  ldx #0
+  ldx #31
   lda #0
 
-clear_text_loop:                    ; write 0s to the first half of the text buffer
+clear_text_loop:                    ; write 0s to the text buffer
   sta TEXT_BUFFER,x
-  inx
-  bne clear_text_loop
-
-clear_text_loop2:
-  sta TEXT_BUFFER+$0100,x         ; write 0s to the second half of the text buffer
-  inx
-  bne clear_text_loop2
+  dex
+  bpl clear_text_loop
 
   plx
   pla
   rts
 
+
+vid_write_hex:                    ; write the number in reg A to the screen starting at VIDEO_PTR. also incremenrt vid ptr twice
+  pha                             ; stash number on stack
+
+  ror
+  ror
+  ror
+  ror
+  and #%00001111                  ; pick out high nibble
+
+  cmp #$0a
+  bcc hi_nibble_num               ; branch if high nibble is number
+
+  clc
+  adc #("a"-10)                   ; set A to ascii letter (
+  jmp write_hi_nibble
+
+hi_nibble_num:
+  clc
+  adc #"0"                        ; set A to ascii number
+
+write_hi_nibble:
+  jsr vid_write_ascii             ; write the high nibble of number
+  jsr inc_vid_ptr
+
+  pla                             ; retrieve number from stack
+  and #%00001111                  ; pick out low nibble
+
+  cmp #$0a
+  bcc lo_nibble_num               ; branch if low nibble is number
+
+  clc
+  adc #("a"-10)                   ; set A to ascii letter
+  jmp write_lo_nibble
+
+lo_nibble_num:
+  clc
+  adc #"0"                        ; set A to ascii number
+
+write_lo_nibble:
+  jsr vid_write_ascii             ; write the low nibble of number
+  jsr inc_vid_ptr
+
+  rts
+
+
+parse_hex_byte:                   ; parse the hex byte (lowercase) ascii number starting at TEXT_BUFFER,y and store the result in A. Also increments y
+  lda TEXT_BUFFER,y               ; load the first symbol
+  jsr parse_hex_char              ; parse it
+
+  asl
+  asl
+  asl
+  asl                             ; move it into the hi nibble
+  sta NIBBLE_STASH                ; stash hi nibble
+
+  iny
+  lda TEXT_BUFFER,y
+  jsr parse_hex_char              ; parse lo nibble
+
+  ora NIBBLE_STASH                ; load in hi nibble into A
+  rts
+
+
+parse_hex_char:                     ; parse the hex char (lower case) in A, store the result in A
+  cmp #"a"                        ; check if it's a letter
+  bcs parse_letter
+  sec
+  sbc #"0"                        ; get the offset from "0" for 0-9
+  rts
+parse_letter:
+  sec
+  sbc #("a"-10)                   ; get the offset from "a" (plus 10) for a-f
+  rts
+
+
+reset_prompt:
+  ldy #31
+  lda #CURSOR_OFF
+
+reset_prompt_loop:
+  sta VRAM_INPUT,y
+  dey
+  bpl reset_prompt_loop
+
+  lda #$e0
+  sta VIDEO_PTR                   ; reset video pointer to $71e0
+  lda #$71
+  sta VIDEO_PTR+1
+
+  lda #">"                        ; write prompt
+  jsr vid_write_ascii
+  inc VIDEO_PTR
+
+  jsr clear_text_buffer           ; clear the text buffer
+  stz TEXT_PTR
+  rts
 
 irq:
   pha
