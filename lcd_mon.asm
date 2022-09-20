@@ -1,11 +1,11 @@
 ; VIA addresses
-PORTA = $7801
-PORTB = $7800
-DDA = $7803
-DDB = $7802
-PCR = $780c
-IFR = $780d
-IER = $780e
+PORTA = $7811
+PORTB = $7810
+DDA = $7813
+DDB = $7812
+PCR = $781c
+IFR = $781d
+IER = $781e
 
 ; VIA Port B bits
 E  = %00001000
@@ -55,11 +55,6 @@ KX_RIGHT = $74
 
 ; Zero page addresses
 
-NUM1 = $00                          ; two bytes
-NUM2 = $02                          ; two bytes
-REM = $04                           ; two bytes
-NUM_TO_DEC = $06                    ; two bytes
-DEC_REVERSE = $08                   ; five bytes
 KB_READ_PTR = $0d                   ; one byte
 KB_WRITE_PTR = $0e                  ; one byte
 KB_FLAGS = $0f                      ; one byte
@@ -84,7 +79,7 @@ jump_table:
   jmp lcd_instruction             ; 8009
 
 start_msg:
-  .string "LCDMon by KT"
+  .string "LCDMon"
 
 reset:
   cli
@@ -201,12 +196,6 @@ key_pressed:
   and KB_FLAGS
   bne x_key_pressed_jmp
 
-;  cpy #K_L_SHIFT                  ; check for left shift press
-;  beq l_shift_pressed
-;
-;  cpy #K_R_SHIFT                  ; check for right shift press
-;  beq r_shift_pressed
-
   cpy #K_ENTER                    ; check for enter press
   beq enter_pressed
 
@@ -264,12 +253,6 @@ key_released:
   and #EXTENDED_NXT
   bne exit_key_released           ; if we're releasing an extended key, don't check shift release
 
-;  cpy #K_L_SHIFT
-;  beq l_shift_released
-;
-;  cpy #K_R_SHIFT
-;  beq r_shift_released
-
 exit_key_released:
   lda KB_FLAGS
   eor #RELEASE_NXT                ; flip release next bit, since we're handling it
@@ -278,15 +261,6 @@ exit_key_released:
 
   jmp update_read_ptr
 
-
-;l_shift_pressed:
-;  lda #L_SHIFT_DOWN
-;  jmp set_kb_flag
-;
-;
-;r_shift_pressed:
-;  lda #R_SHIFT_DOWN
-;  jmp set_kb_flag
 
 enter_pressed:
   phx                             ; stash x on stack
@@ -367,32 +341,10 @@ write_byte:                         ; write data to MON_ADDR, starting with the 
   jmp write_byte                  ; write next byte
 
 
-
-
-
-;l_shift_released:
-;  lda KB_FLAGS
-;  eor #L_SHIFT_DOWN
-;  sta KB_FLAGS
-;  jmp exit_key_released
-;
-;r_shift_released:
-;  lda KB_FLAGS
-;  eor #R_SHIFT_DOWN
-;  sta KB_FLAGS
-;  jmp exit_key_released
-
-
 x_key_pressed:
   lda KB_FLAGS
   and #(~EXTENDED_NXT)
   sta KB_FLAGS                    ; clear the extended flag
-
-;  cpy #KX_DOWN
-;  beq down_pressed
-;
-;  cpy #KX_UP
-;  beq up_pressed
 
   cpy #KX_RIGHT
   beq right_pressed
@@ -401,25 +353,6 @@ x_key_pressed:
   beq left_pressed
 
   jmp update_read_ptr
-
-;down_pressed:             ; disable up and down arrow for monitor
-;  jsr lcd_read_addr       ; load current LCD addr into A
-;  cmp #$40
-;  bcs return_from_press   ; if address is $40 or greater, do nothing
-;  adc #$40                ; otherwise, add $40 -- we know carry bit is clear
-;  ora #SET_ADDR
-;  jsr lcd_instruction     ; send set_addr with new address
-;
-;  jmp update_read_ptr
-;
-;up_pressed:
-;  jsr lcd_read_addr     ; load current LCD addr into A
-;  cmp #$40
-;  bcc return_from_press ; if address if $40 or more, do nothing
-;  sbc #$40              ; new address should be current address - 40 -- we know carry bit is set
-;  ora #SET_ADDR
-;  jsr lcd_instruction   ; send set_addr to new address
-;  jmp update_read_ptr
 
 right_pressed:
   ldy CURSOR_PTR
@@ -445,69 +378,6 @@ left_pressed:
   jsr lcd_instruction             ; send cursor left instruction
   jmp update_read_ptr
 
-
-divide:                             ; divide two-byte NUM1 by two-byte NUM2. result goes in NUM1, remainder in REM
-  pha
-  phx
-  phy
-
-  ldx #16                         ; counter for bits to rotate
-  lda #0                          ; initialize remainder to zero
-  sta REM
-  sta REM+1
-
-div_loop:
-  asl NUM1                        ; rotate zero into low bit of result, rotate into remainder
-  rol NUM1+1
-  rol REM
-  rol REM+1
-
-  sec                              ; set carry bit for borrowing, try subtracting num2 from remainder
-  lda REM
-  sbc NUM2
-  tay
-  lda REM+1
-  sbc NUM2+1
-
-  bcc div_after_save              ; if carry bit is clear, subtraction failed
-  sty REM                         ; if subtraction succeeded, save sub result and set bit of division result to 1
-  sta REM+1
-  inc NUM1
-
-div_after_save:
-  dex                             ; loop until x = 0 (16 times for two-byte division)
-  bne div_loop
-
-  ply
-  plx
-  pla
-  rts
-
-lcd_read_addr:                      ; read the LCD address counter into A
-  lda #%00001110                  ; setup LCD data bits as input
-  sta DDB
-
-  lda #RW                         ; tell LCD to send data
-  sta PORTB
-  lda #(RW | E)                   ; send enable bit to read high nibble
-  sta PORTB
-  lda PORTB                       ; read response
-  and #%01110000                  ; zero out low nibble and busy flag
-  sta NIBBLE_STASH                ; stash high nibble
-
-  lda #RW
-  sta PORTB
-  lda #(RW | E)                   ; toggle enable bit to read low nibble
-  sta PORTB
-  lda PORTB
-  ror
-  ror
-  ror
-  ror
-  and #%00001111                  ; shift low nibble and zero out high nibble
-  ora NIBBLE_STASH                ; combine with stashed high nibble
-
-  rts
 
 lcd_wait:
   pha
@@ -598,47 +468,6 @@ lcd_write:                          ; write the contents of A
   eor #E                          ; toggle enable bit off
   sta PORTB
 
-  rts
-
-
-lcd_write_dec:                      ; write the number at NUM_TO_DEC (two bytes) in decimal
-  pha
-  phx
-  ldx #0
-
-  lda NUM_TO_DEC
-  sta NUM1
-  lda NUM_TO_DEC+1
-  sta NUM1+1
-
-store_dec_loop:
-  lda #10
-  sta NUM2
-  lda #0
-  sta NUM2+1
-
-  jsr divide                      ; divide NUM1 by 10
-
-  lda REM
-  clc
-  adc #"0"                        ; convert to ASCII code
-  sta DEC_REVERSE,x               ; store digits in reverse order
-  inx
-
-  lda NUM1                        ; check if result is 0
-  ora NUM1+1
-
-  bne store_dec_loop              ; if not, divide again
-  dex
-
-write_dec_loop:
-  lda DEC_REVERSE,x               ; write digits in reverse order
-  jsr lcd_write
-  dex
-  bpl write_dec_loop
-
-  plx
-  pla
   rts
 
 

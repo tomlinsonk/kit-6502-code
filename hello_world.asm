@@ -1,9 +1,9 @@
 
 LCD_DATA = $00
-PORTA = $7801
-PORTB = $7800
-DDA = $7803
-DDB = $7802
+PORTA = $7811
+PORTB = $7810
+DDA = $7813
+DDB = $7812
 
 E  = %00001000
 RW = %00000100
@@ -58,35 +58,37 @@ done:
 message:
   .string "  Kiran's 6502"
 
-lcd_read_busy:
+
+lcd_wait:
   pha
   phx
-  lda #%00001110      ; setup LCD data bits as input
+  lda #%00001110                  ; setup LCD data bits as input
   sta DDB
 
 lcd_busy:
-  lda #RW             ; tell LCD to send data
+  lda #RW                         ; tell LCD to send data
   sta PORTB
 
-  lda #(RW | E)       ; send enable bit
+  lda #(RW | E)                   ; send enable bit
   sta PORTB
 
-  lda PORTB           ; read response
-  tax                 ; stash for second read
+  lda PORTB                       ; read response
+  tax                             ; stash for second read
 
   lda #RW
   sta PORTB
-  lda #(RW | E)       ; toggle enable bit, ignore read
+  lda #(RW | E)                   ; toggle enable bit, ignore read
   sta PORTB
+  lda PORTB
 
   txa
-  and #%10000000      ; check the busy flag
-  bne lcd_busy        ; if busy flag set, loop
+  and #%10000000                  ; check the busy flag
+  bne lcd_busy                    ; if busy flag set, loop
 
   lda #RW
   sta PORTB
 
-  lda #%11111110      ; setup LCD pins as output
+  lda #%11111110                  ; setup LCD pins as output
   sta DDB
 
   plx

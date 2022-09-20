@@ -1,11 +1,11 @@
 ; VIA addresses
-PORTA = $7801
-PORTB = $7800
-DDA = $7803
-DDB = $7802
-PCR = $780c
-IFR = $780d
-IER = $780e
+PORTA = $7811
+PORTB = $7810
+DDA = $7813
+DDB = $7812
+PCR = $781c
+IFR = $781d
+IER = $781e
 
 ; VIA Port B bits
 E  = %00001000

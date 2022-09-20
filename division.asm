@@ -1,7 +1,7 @@
-PORTA = $7801
-PORTB = $7800
-DDA = $7803
-DDB = $7802
+PORTA = $7811
+PORTB = $7810
+DDA = $7813
+DDB = $7812
 
 LCD_DATA = $00      ; one byte for stashing LCD display char
 NUM1 = $01          ; two bytes at $01 and $02
