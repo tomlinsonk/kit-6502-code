@@ -164,6 +164,8 @@ print_after_write:
     jmp print_8_bytes
 
 
+
+
 /*
 Handle a backspace press
 */
@@ -278,7 +280,7 @@ reset_prompt_loop:
     inc zp.vid_ptr
 
     jsr clear_text_buffer                                   // clear the text buffer
-    stz zp.txt_ptr
+    set_txt_ptr(text_buffer)
     rts
 
 
