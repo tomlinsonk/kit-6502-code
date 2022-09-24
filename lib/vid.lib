@@ -105,7 +105,6 @@ fill_2nd_half:
 /* --------------------------------------------------------------------------------------- 
 write the ascii char in A to the address in the video pointer
 writes upper case as inverted, assuming data bit 6 in text mode is INV
-also increments the video pointer and wraps at 512
 */
 write_ascii:
     pha
@@ -130,6 +129,57 @@ video_write:
     ply
     pla
     rts
+
+/* --------------------------------------------------------------------------------------- 
+write the number in A to the address in the video pointer
+also increment vid ptr twice
+*/
+write_hex:                                        
+    pha                                             // stash number on stack
+    pha
+
+    ror
+    ror
+    ror
+    ror
+    and #%00001111                                  // pick out high nibble
+
+    cmp #$0a
+    bcc hi_nibble_num                               // branch if high nibble is number
+
+    clc
+    adc #('a'-10)                                   // set A to ascii letter 
+    jmp write_hi_nibble
+
+hi_nibble_num:
+    clc
+    adc #'0'                                        // set A to ascii number
+
+write_hi_nibble:
+    jsr write_ascii                                 // write the high nibble of number
+    inc_vid_ptr()
+
+    pla                                             // retrieve number from stack
+    and #%00001111                                  // pick out low nibble
+
+    cmp #$0a
+    bcc lo_nibble_num                               // branch if low nibble is number
+
+    clc
+    adc #('a'-10)                                   // set A to ascii letter
+    jmp write_lo_nibble
+
+lo_nibble_num:
+    clc
+    adc #'0'                                        // set A to ascii number
+
+write_lo_nibble:
+    jsr write_ascii                                 // write the low nibble of number
+    inc_vid_ptr()
+
+    pla
+    rts
+
 
 
 /* --------------------------------------------------------------------------------------- 
@@ -170,17 +220,17 @@ exit_dec_video_ptr:
 
 
 /* --------------------------------------------------------------------------------------- 
-Shift everything on the display up by n rows.
+Shift everything on the display up by n rows, skipping the bottom skip rows.
 Moves the video pointer, and uses zp.B, zp.C as stash
 */
-.macro @shift_vid_up(n) {
+.macro @shift_vid_up(n, skip) {
 	set_vid_ptr(0, 0)
 	lda #<VRAM_START + (mod(n, 8) * 32)
 	sta zp.B
 	lda #>VRAM_START + floor(n / 8) 
 	sta zp.B+1
 
-	ldx #(16-n)
+	ldx #(16 - n - skip)
 shift_row_loop:
 	ldy #31
 
@@ -211,15 +261,14 @@ no_inc_vid_hi:
 	
 }
 
-
 /* --------------------------------------------------------------------------------------- 
 Set the video pointer to a specific row and col in text mode.
 Row should be in [0, 15]
 Col should be in [0, 31] 
 */
 .macro @set_vid_ptr(row, col) {
-	lda #<VRAM_START + (mod(row, 8) * 32 + col)    // load the low byte of the new video pointer
-	sta zp.vid_ptr
-	lda #>VRAM_START + floor(row / 8) 			  // load the hi byte of the new video pointer
-	sta zp.vid_ptr + 1
+	lda #((<VRAM_START) + (mod(row, 8) * 32 + col))   // load the low byte of the new video pointer
+    sta zp.vid_ptr
+	lda #((>VRAM_START) + floor(row / 8)) 			  // load the hi byte of the new video pointer
+    sta zp.vid_ptr + 1
 }

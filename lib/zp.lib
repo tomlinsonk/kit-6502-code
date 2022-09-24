@@ -37,9 +37,14 @@ Pointers, flags, and counters
 .label kb_write_ptr = $11							// one byte
 .label kb_flags = $12								// one byte
 .label vid_ptr = $13 								// two bytes
+// $14
 .label cursor_blink_count = $15 					// one byte
 .label txt_ptr = $16 								// two bytes
+// $17
 .label vid_flags = $18 								// one byte
+.label mon_addr = $19 								// two bytes
+// $1a
+
 
 /*
 Block 2
