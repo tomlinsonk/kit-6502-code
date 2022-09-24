@@ -31,23 +31,24 @@ reset:
     jsr vid.init_cursor
     jsr lcd.init
 
-    jsr clear_text_buffer     
+    brk                                             // start the monitor
 
+loop:
+    jmp loop
+
+
+start_mon:                                              
+    // Stack has R_HI, R_LO, P, X, A, Y <
     jsr reset_prompt
 
-    set_txt_ptr(text_buffer)                         // reset text pointer
-
-
-start_mon:                                               // main loop
-    // Stack has R_HI, R_LO, P, X, A, Y <
-
+mon_loop:
     jsr kb.get_press
     bne key_pressed
 
     ldy #0
     blink_cursor #vid.CURSOR_ON : (zp.txt_ptr),y
     
-    jmp start_mon                        
+    jmp mon_loop                        
 
 
 key_pressed:
@@ -76,7 +77,7 @@ not_enter:
     jsr inc_vid_txt_ptrs
     force_cursor_update()
 
-    jmp start_mon
+    jmp mon_loop
 
 
 
@@ -140,7 +141,7 @@ addr_no_carry:
 enter_reset:
     jsr reset_prompt
     plx
-    jmp start_mon
+    jmp mon_loop
 
 write_byte:                                         // write data to mon_addr, starting with the byte at TEXT_BUFFER+y+1 (TEXT_BUFFER+y is //). x initialzed to 0
     iny
@@ -178,7 +179,7 @@ backspace_pressed:
     jsr vid.write_ascii                             // write that space to the screen
     force_cursor_update()
 
-    jmp start_mon
+    jmp mon_loop
 
 
 /*
@@ -193,7 +194,7 @@ extended_pressed:
     jsr vid.write_ascii                             // write the character under the cursor
     jsr dec_vid_txt_ptrs                            // decrement text pointer
     force_cursor_update()   
-    jmp start_mon
+    jmp mon_loop
 not_left:
 
     cmp #kb.K_RIGHT
@@ -202,10 +203,10 @@ not_left:
     jsr vid.write_ascii                             // write the character under the cursor
     jsr inc_vid_txt_ptrs                            // increment text pointer
     force_cursor_update()
-    jmp start_mon    
+    jmp mon_loop    
 not_right:
     
-    jmp start_mon
+    jmp mon_loop
 
 
 /*
@@ -312,7 +313,7 @@ dec_vid_txt_ptrs:
 break:
     phy
     // Now stack has R_HI, R_LO, P, X, A, Y <
-
+    jmp start_mon
 
 irq:
     phx                                                     // stash X on stack
