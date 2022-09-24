@@ -1,0 +1,225 @@
+#importonce
+.filenamespace vid
+
+.cpu _65c02
+.encoding "ascii"
+
+// Video addresses
+.label VRAM_START = $7000
+.label VRAM_END = $7fff
+.label VRAM_TXT_END = $71ff
+
+// Characters
+.label CURSOR_ON = %10001111
+.label CURSOR_OFF = %10000000
+
+#import "via.lib"
+
+/* --------------------------------------------------------------------------------------- 
+Initialize the display
+*/
+init:
+	jsr blank_screen
+	set_vid_ptr(0, 0)
+	stz zp.cursor_blink_count
+    stz zp.vid_flags
+	rts
+
+
+/* --------------------------------------------------------------------------------------- 
+Initialize the blinking cursor
+*/
+init_cursor:
+	lda via.IER
+	ora #(via.INT_ENABLE | via.TIMER1_INT)
+	sta via.IER 									// enable timer 1 interrupts
+
+	lda #via.T1_CONTINUOUS
+    sta via.ACR                         			// set up timer 1 for continuous interrupts for cursor blink
+
+    lda #$ff
+    sta via.T1_LO                       			// write all 1s to timer 1 lo
+    sta via.T1_HI                       			// write all 1s to timer 1 hi, starting the timer
+
+    stz zp.cursor_blink_count						// initialize cursor blink counter
+
+	rts
+
+/* --------------------------------------------------------------------------------------- 
+Handle the cursor timer irq. Increments cursor blink count
+*/
+.macro @handle_cursor_timer_irq() {
+	ldx via.T1_LO                       			// clear timer 1 interrupt by reading lo t1 byte
+    inc zp.cursor_blink_count          				// increment the blink counter			
+}
+
+
+.pseudocommand @blink_cursor on : off {
+    bbr3 zp.cursor_blink_count,cursor_off           // if bit 3 of blink count is 0, turn off cursor
+    bbs0 zp.vid_flags,done                          // if cursor is on, skip writing
+    smb0 zp.vid_flags                               // store cursor on
+    lda on                                          // otherwise, load cursor char
+    jsr write_ascii
+    jmp done
+cursor_off:
+    bbr0 zp.vid_flags,done                          // if cursor is off, skip writing
+    rmb0 zp.vid_flags                               // store cursor off
+    lda off                                         // load character under cursor
+    jsr vid.write_ascii
+done:
+}
+
+
+.macro @force_cursor_update() {
+    bbr3 zp.cursor_blink_count,done                 // if bit 3 of blink count is 0, cursor is off
+    smb0 zp.vid_flags                               // store cursor on
+    lda #CURSOR_ON                                          // otherwise, load cursor char
+    jsr write_ascii
+done:
+}
+
+
+/* --------------------------------------------------------------------------------------- 
+Blank the screen in text mode
+*/
+blank_screen:
+	pha
+	phx
+
+	ldx #0
+	lda #CURSOR_OFF
+fill_1st_half:
+    sta VRAM_START,x
+    inx
+    bne fill_1st_half                             	// first loop: 256 times
+fill_2nd_half:
+    sta VRAM_START+$0100,x
+    inx
+    bne fill_2nd_half                               // second loop: 256 times
+
+	plx
+	pla
+	rts
+
+
+/* --------------------------------------------------------------------------------------- 
+write the ascii char in A to the address in the video pointer
+writes upper case as inverted, assuming data bit 6 in text mode is INV
+also increments the video pointer and wraps at 512
+*/
+write_ascii:
+    pha
+    phy
+
+    cmp #0                                          // load N and Z flags with A7 and A==0
+    bmi video_write                                 // if leading bit is 1, this is a graphic char. write it.
+
+    bne write_ascii_symbol                    		// if this is a not a 0, write the symbol
+    lda #CURSOR_OFF
+    jmp video_write                                 // if this is a 0, write blank
+
+write_ascii_symbol:
+    cmp #$60                                        // check if code is $60 or more
+    bcc video_write                                 // if it's below $60, we can immediately write it
+    and #%00011111                                  // otherwise, it's a lowercase letter. only keep bottom 5 bits
+
+video_write:
+    ldy #0
+    sta (zp.vid_ptr),y                             	// write six bit ascii to memory at address in VIDEO_PTR
+
+    ply
+    pla
+    rts
+
+
+/* --------------------------------------------------------------------------------------- 
+increment the video and pointer, wrapping from 512 to 0
+*/
+inc_vid_ptr:
+    inc_vid_ptr()
+    rts
+
+.macro @inc_vid_ptr() {
+	inc zp.vid_ptr                                  // increment the video pointer
+    bne exit_inc_ptr                                // check if it became 0 when incremented. If not, we're good to return
+    inc zp.vid_ptr+1                                // also carry to hi byte of video ptr
+    bbr1 zp.vid_ptr+1,exit_inc_ptr     				// if 2s bit of hi byte is 0, we're good to return
+    rmb1 zp.vid_ptr+1                               // otherwise, we're passing 512 chars and need to reset to 0
+exit_inc_ptr:		
+}
+
+
+/* --------------------------------------------------------------------------------------- 
+decrement the video pointer, wrapping from 0 to 512
+*/
+dec_vid_ptr:
+    pha
+    dec zp.vid_ptr                                  // decrement the video pointer
+    lda #$ff
+    cmp zp.vid_ptr                                  // check if we carried
+    bne exit_dec_video_ptr                   		// if not, good to return
+    dec zp.vid_ptr+1                                // if we did carry, decrement hi byte
+    lda zp.vid_ptr+1                                // load the video pointer hi byte
+    cmp #>VRAM_START                         		// compare with smallest valid hi byte for VRAM
+    bcs exit_dec_video_ptr                    		// if video pointer hi byte is >=, can return
+    lda #>VRAM_TXT_END							// otherwise, reset it to end of screen
+    sta zp.vid_ptr+1
+exit_dec_video_ptr:
+    pla
+    rts
+
+
+/* --------------------------------------------------------------------------------------- 
+Shift everything on the display up by n rows.
+Moves the video pointer, and uses zp.B, zp.C as stash
+*/
+.macro @shift_vid_up(n) {
+	set_vid_ptr(0, 0)
+	lda #<VRAM_START + (mod(n, 8) * 32)
+	sta zp.B
+	lda #>VRAM_START + floor(n / 8) 
+	sta zp.B+1
+
+	ldx #(16-n)
+shift_row_loop:
+	ldy #31
+
+shift_col_loop:
+    lda (zp.B),y
+    sta (zp.vid_ptr),y                             // copy row into previous row
+    dey
+    bpl shift_col_loop
+
+    lda zp.B
+    clc
+    adc #32                                        // add 32 to stash ptr
+    sta zp.B
+    bcc no_inc_stash_hi
+    inc zp.B+1
+
+no_inc_stash_hi:
+    lda zp.vid_ptr
+    clc
+    adc #32                                        // add 32 to vid pointer
+    sta zp.vid_ptr
+    bcc no_inc_vid_hi
+    inc zp.vid_ptr+1
+
+no_inc_vid_hi:
+    dex
+    bne shift_row_loop
+	
+}
+
+
+/* --------------------------------------------------------------------------------------- 
+Set the video pointer to a specific row and col in text mode.
+Row should be in [0, 15]
+Col should be in [0, 31] 
+*/
+.macro @set_vid_ptr(row, col) {
+	lda #<VRAM_START + (mod(row, 8) * 32 + col)    // load the low byte of the new video pointer
+	sta zp.vid_ptr
+	lda #>VRAM_START + floor(row / 8) 			  // load the hi byte of the new video pointer
+	sta zp.vid_ptr + 1
+}

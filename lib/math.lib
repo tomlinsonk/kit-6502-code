@@ -1,0 +1,53 @@
+#importonce
+.filenamespace math
+
+.cpu _65c02
+.encoding "ascii"
+
+#import "zp.lib"
+
+.label dividend = zp.B 								// two bytes (B, C)
+.label divisor = zp.D 								// two bytes (D, E)
+.label quotient = zp.B 								// two bytes (B, C); alias for dividend
+.label remainder = zp.F 							// two bytes (F, G)
+
+/* --------------------------------------------------------------------------------------- 
+Divide two-byte number in dividend (zp.B,C) by two-byte number in divisor (zp.D,E).
+Result goes in quotient (zp.B,C), remainder in remainder (zp.F,E).
+Overwrites dividend and divisor.
+*/
+divide16:                                                        
+    pha
+    phx
+    phy
+
+    ldx #16 										// counter for bits to rotate
+    stz remainder									// initialize remainder to zero
+    stz remainder+1
+
+div_loop:
+    asl dividend                                    // rotate zero into low bit of result, rotate into remainder
+    rol dividend+1
+    rol remainder
+    rol remainder+1
+
+    sec                                 			// set carry bit for borrowing, try subtracting divisor from remainder
+    lda remainder
+    sbc divisor
+    tay
+    lda remainder+1
+    sbc divisor+1
+
+    bcc div_after_save                            	// if carry bit is clear, subtraction failed
+    sty remainder                                   // if subtraction succeeded, save sub result and set bit of division result to 1
+    sta remainder+1
+    inc dividend
+
+div_after_save:
+    dex                                 			// loop until x = 0 (16 times for two-byte division)
+    bne div_loop
+
+    ply
+    plx
+    pla
+    rts

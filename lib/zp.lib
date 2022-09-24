@@ -1,0 +1,49 @@
+#importonce
+.filenamespace zp
+
+.cpu _65c02
+.encoding "ascii"
+
+/*
+Block 0
+------------------------------------
+Zero page general-purpose addresses
+("extra registers" to augment A, X, Y)
+*/
+.label B = $00
+.label C = $01
+.label D = $02
+.label E = $03
+.label F = $04
+.label G = $05
+.label H = $06
+.label I = $07
+.label J = $08
+.label K = $09
+.label L = $0a
+.label M = $0b
+.label N = $0c
+.label O = $0d
+.label P = $0e
+.label Q = $0f
+
+
+/*
+Block 1
+------------------------------------
+Pointers, flags, and counters
+*/
+.label kb_read_ptr = $10							// one byte
+.label kb_write_ptr = $11							// one byte
+.label kb_flags = $12								// one byte
+.label vid_ptr = $13 								// two bytes
+.label cursor_blink_count = $15 					// one byte
+.label txt_ptr = $16 								// two bytes
+.label vid_flags = $18 								// one byte
+
+/*
+Block 2
+------------------------------------
+Keyboard buffer
+*/
+.label kb_buffer = $20    							// 16 bytes
