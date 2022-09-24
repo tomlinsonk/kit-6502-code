@@ -35,17 +35,19 @@ reset:
 
     jsr reset_prompt
 
-    set_txt_ptr(text_buffer)                         // reset text pointer to $0200
+    set_txt_ptr(text_buffer)                         // reset text pointer
 
 
-loop:                                               // main loop
+start_mon:                                               // main loop
+    // Stack has R_HI, R_LO, P, X, A, Y <
+
     jsr kb.get_press
     bne key_pressed
 
     ldy #0
     blink_cursor #vid.CURSOR_ON : (zp.txt_ptr),y
     
-    jmp loop                        
+    jmp start_mon                        
 
 
 key_pressed:
@@ -55,7 +57,7 @@ not_extended:
 
     cmp #kb.ASCII_ESC                               // check for esc press
     bne not_esc
-    jmp esc_pressed
+    jmp reset
 not_esc:
 
     cmp #kb.ASCII_BACKSPACE                         // check for backspace
@@ -74,14 +76,13 @@ not_enter:
     jsr inc_vid_txt_ptrs
     force_cursor_update()
 
-    jmp loop
+    jmp start_mon
 
 
 
-esc_pressed:
-    jmp reset
-
-
+/*
+Main monitor code. Parse and execute command
+*/
 enter_pressed:
     phx
     ldx #0                                          // load offset of 0 for indirect indexed addressing / offset for writing
@@ -139,7 +140,7 @@ addr_no_carry:
 enter_reset:
     jsr reset_prompt
     plx
-    jmp loop
+    jmp start_mon
 
 write_byte:                                         // write data to mon_addr, starting with the byte at TEXT_BUFFER+y+1 (TEXT_BUFFER+y is //). x initialzed to 0
     iny
@@ -162,6 +163,9 @@ print_after_write:
     jmp print_8_bytes
 
 
+/*
+Handle a backspace press
+*/
 backspace_pressed:
     ldy #0
     lda (zp.txt_ptr),y                              // load the char under the cursor
@@ -174,9 +178,12 @@ backspace_pressed:
     jsr vid.write_ascii                             // write that space to the screen
     force_cursor_update()
 
-    jmp loop
+    jmp start_mon
 
 
+/*
+Handle the extended keypresses (arrow keys)
+*/
 extended_pressed:
     ldy #0
 
@@ -186,7 +193,7 @@ extended_pressed:
     jsr vid.write_ascii                             // write the character under the cursor
     jsr dec_vid_txt_ptrs                            // decrement text pointer
     force_cursor_update()   
-    jmp loop
+    jmp start_mon
 not_left:
 
     cmp #kb.K_RIGHT
@@ -195,15 +202,15 @@ not_left:
     jsr vid.write_ascii                             // write the character under the cursor
     jsr inc_vid_txt_ptrs                            // increment text pointer
     force_cursor_update()
-    jmp loop    
+    jmp start_mon    
 not_right:
     
-    jmp loop
+    jmp start_mon
 
 
-
-// subroutine
-// fills the text buffer with 0s
+/*
+Fill the text buffer with 0s
+*/
 clear_text_buffer:
     pha
     phx
@@ -252,6 +259,9 @@ parse_letter:
     rts
 
 
+/*
+Redraw the prompt, clear the text buffer, and reset the vid and txt pointers
+*/
 reset_prompt:
     set_vid_ptr(15, 0)
     ldy #31
@@ -266,7 +276,7 @@ reset_prompt_loop:
     jsr vid.write_ascii
     inc zp.vid_ptr
 
-    jsr clear_text_buffer                     // clear the text buffer
+    jsr clear_text_buffer                                   // clear the text buffer
     stz zp.txt_ptr
     rts
 
@@ -299,9 +309,20 @@ dec_vid_txt_ptrs:
 }
 
 
+break:
+    phy
+    // Now stack has R_HI, R_LO, P, X, A, Y <
+
+
 irq:
-    pha
-    phx
+    phx                                                     // stash X on stack
+    tsx                                                     // put stack pointer in X
+    pha                                                     // stash A on stack
+    inx 
+    inx                                                     // increment X twice so it points to the processor flags
+    lda $100,x                                              // load the processor flags on the stack
+    and #$10                                                // check for brk
+    bne break                                               // if break bit is set, go to break handler
     phy
        
     lda via.IFR
@@ -342,8 +363,8 @@ no_ca1_irq:
 no_timer1_irq:
 
     ply
-    plx
     pla
+    plx
     rti
 
 
