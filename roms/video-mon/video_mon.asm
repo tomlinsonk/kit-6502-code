@@ -3,11 +3,14 @@
 
 // RAM addresses
 
-.label text_buffer = $0200                           // 31 bytes (0200-021f)
+.label text_buffer = $0200                          // 31 bytes (0200-021f)
 .label text_buffer_end = $021e                            
-.label vram_inline_start = $71e1
+.label zp_reg_stash = $0220                         // 16 bytes
 
-// other RAM addresses
+
+
+// RAM labels
+.label vram_inline_start = $71e1
 
 
 *=$8000                                             // ROM starts at address $8000
@@ -20,6 +23,7 @@ jump_table:
 #import "macros.lib"
 #import "vid.lib"
 #import "lcd.lib"
+#import "uart.lib"
 
 
 reset:
@@ -31,6 +35,11 @@ reset:
     jsr vid.init_cursor
     jsr lcd.init
 
+    lda #$42
+    ldx #$ff
+    ldy #$24
+    txs
+
     brk                                             // start the monitor
 
 loop:
@@ -39,6 +48,7 @@ loop:
 
 start_mon:                                              
     // Stack has R_HI, R_LO, P, X, A, Y <
+    jsr stash_zp_registers
     jsr reset_prompt
 
 mon_loop:
@@ -85,7 +95,6 @@ not_enter:
 Main monitor code. Parse and execute command
 */
 enter_pressed:
-    phx
     ldx #0                                          // load offset of 0 for indirect indexed addressing / offset for writing
 
     ldy #0                                          // cursor off
@@ -93,77 +102,382 @@ enter_pressed:
     jsr vid.write_ascii
 
     shift_vid_up(2, 0)                              // move display up                                                    
+    fill_vid_row(14, ' ')
     set_vid_ptr(14, 0)
 
-    ldy #0                                          // start at the beginning of the text buffer
-    jsr parse_hex_byte                              // load hi hex byte into A and increment y
-    sta zp.mon_addr+1                               // store the hi byte
-    pha                                             // stash hi byte for writing
-    jsr vid.write_hex                               // display it in hex
+    ldy #0                                          // read the first char
+    lda text_buffer,y
+
+    cmp #'r'
+    bne not_read
+    jmp read_command
+not_read:
+
+    cmp #'w'
+    bne not_write
+    jmp write_command
+not_write:
+
+    cmp #'g'
+    bne not_go
+    jmp go_command
+not_go:
+
+    cmp #'s'
+    bne not_status
+    jmp status_command
+not_status:
+
+    cmp #'u'
+    bne not_update
+    jmp update_command
+not_update:
+
+    cmp #'l'
+    bne not_load
+    jmp load_command
+not_load:
+
+    cmp #'x'
+    bne not_exit
+    jmp exit_command
+not_exit:
+
+enter_reset:
+    jsr reset_prompt
+
+    jmp mon_loop
+
+
+/*
+Write command
+*/
+write_command:                                      
+    jsr parse_and_print_addr
+    beq enter_reset                                 // if we didn't get an addr, reset
+
+write_byte:
+    consume_spaces(print_after_write)               // read spaces until we get something else
     
-    iny                                             // increment y again to go to start of next byte
-    jsr parse_hex_byte                              // load lo hex byte into A and increment y
-    sta zp.mon_addr                                 // store the lo byte
-    pha                                             // stash lo byte for writing
-    jsr vid.write_hex                               // display it in hex
+    jsr parse_hex_byte                              // parse the next byte, incrementing y
+    sta (zp.mon_addr,x)                             // write the byte to mon addr pointer (x is 0)
+    inc2 zp.mon_addr
+    jmp write_byte   
 
-    iny                                             // increment y to go to char after addr
-    lda text_buffer,y                               // read next char
+print_after_write:
+    mov2 zp.mon_arg1 : zp.mon_addr
+    jmp print_8_bytes
 
-    cmp #';'                                        // check if it's ;
-    beq write_byte                                  // if so, go to write mode.
-    ply
-    ply                                             // remove mon addr from stack if we're not writing
 
-    cmp #'r'                                        // check if it's r
-    bne print_8_bytes                               // if it's not, dont run!
-    jmp (zp.mon_addr)                               // if it is, RUN! :)
+/*
+Read command
+*/
+read_command:
+    jsr parse_and_print_addr
+    beq enter_reset                                 // if we didn't get an addr, reset
+
 print_8_bytes:
     ldy #8                                          // 8 bytes to display
-print_colon:
-    lda #':'
-    jsr vid.write_ascii                             // display colon
-    inc zp.vid_ptr
-
+    ldx #0
 print_data:
     lda #' '
     jsr vid.write_ascii                             // display space
     inc zp.vid_ptr
     lda (zp.mon_addr,x)                             // load the data at address mon_addr into A// x is still 0
     jsr vid.write_hex                               // display it
-    inc zp.mon_addr                                 // increment address to print
-    bne addr_no_carry                               // check if 0 after incrementing (if 0, need to carry)
-    inc zp.mon_addr+1                               // if mon_addr became 0 after inc, need to carry to hi byte
+    inc2 zp.mon_addr                                 // increment address to print
 addr_no_carry:
     dey                                             // decrement number of bytes left to print
     bne print_data                                  // if it's not zero, keep printing
 
-enter_reset:
-    jsr reset_prompt
-    plx
-    jmp mon_loop
+    jmp enter_reset
 
-write_byte:                                         // write data to mon_addr, starting with the byte at TEXT_BUFFER+y+1 (TEXT_BUFFER+y is //). x initialzed to 0
+
+/*
+Go command
+*/
+go_command:
+    consume_spaces(enter_reset)                     // read spaces until we get something else
+
+    jsr parse_hex_byte                              // load hi hex byte into A and increment y
+    sta zp.mon_addr+1
+    iny
+    jsr parse_hex_byte                              // load lo hex byte into A
+    sta zp.mon_addr
+go:
+    jsr restore_zp_registers                        // restore zp.B,C,D,...
+
+    ply
+    pla
+    plx
+    plp                                             // restore registers
+
+    jmp (zp.mon_addr)                               // go!
+
+
+/*
+Status command
+*/
+status_command:
+    tsx                                             // put stack pointer in x
+    txa
+    clc
+    adc #6
+    tax                                             // x is now SP+6
+
+    vid_write_string("PC")                          // display program counter
+    lda $0100,x                                     // read PC hi byte
+    jsr vid.write_hex
+    dex                                             // x is now SP+5
+    lda $0100,x                                     // read PC lo byte
+    jsr vid.write_hex
+
+    inc zp.vid_ptr
+    
+    vid_write_string("P")                           // display processor flags
+    dex                                             // x is now SP+4
+    lda $0100,x                                     
+    jsr vid.write_hex                              
+
+    inc zp.vid_ptr
+
+    vid_write_string("A")                           // display A
+    dex 
+    dex                                             // x is now SP+2
+    lda $0100,x                                     
+    jsr vid.write_hex                              
+
+    inc zp.vid_ptr
+
+    vid_write_string("X")                           // display X
+    inx                                             // x is now SP+3
+    lda $0100,x                                     
+    jsr vid.write_hex                              
+
+    inc zp.vid_ptr
+
+    vid_write_string("Y")                           // display Y
+    dex
+    dex                                             // x is now SP+1
+    lda $0100,x                                     
+    jsr vid.write_hex     
+
+    inc zp.vid_ptr                         
+
+    vid_write_string("S")                           // display stack pointer
+    dex                                             // x is now SP
+    txa                                             // transfer SP into A
+    jsr vid.write_hex                               // write stack pointer
+
+
+    jmp enter_reset
+
+/*
+Update command
+Changes the value of CPU registers, then displays the new status
+*/
+update_command:
+    tsx                                             // put stack pointer in x
+    txa
+    clc
+    adc #6
+    tax                                             // x is now SP+6
+
+    consume_spaces(status_command)                  // read spaces until we get something else
+    lda text_buffer,y 
+    cmp #'-'
+    bne do_pc_update                                // if the text buffer char is -, keep PC unchanged
+    dex                                             // x in now SP+5
+    jmp skip_pc_update
+do_pc_update:
+    jsr parse_hex_byte                              // load hi hex byte into A and increment y
+    sta $0100,x                                     // store hi byte of new PC on stack
+    iny
+    dex                                             
+    jsr parse_hex_byte                              // load lo hex byte into A and increment y
+    sta $0100,x                                     // store lo byte of new PC on stack
+skip_pc_update:
+
+    dex                                             // x is now SP+4
+    consume_spaces(status_command)                  // read spaces until we get something else
+    lda text_buffer,y 
+    cmp #'-'
+    beq skip_p_update                               // if the text buffer char is -, keep stack pointer unchanged
+    jsr parse_hex_byte                              // load hex byte into A and increment y
+    sta $0100,x                                     
+skip_p_update:
+    
+    dex                                             
+    dex                                             // x is now SP+2
+    consume_spaces(status_command)                  // read spaces until we get something else
+    lda text_buffer,y 
+    cmp #'-'
+    beq skip_a_update                               // if the text buffer char is -, keep stack pointer unchanged
+    jsr parse_hex_byte                              // load hex byte into A and increment y                                           
+    sta $0100,x                                     
+skip_a_update:
+
+    inx                                             // x is now SP+3
+    consume_spaces(status_command)                  // read spaces until we get something else
+    lda text_buffer,y 
+    cmp #'-'
+    beq skip_x_update                               // if the text buffer char is -, keep stack pointer unchanged
+    jsr parse_hex_byte                              // load hex byte into A and increment y
+    sta $0100,x                                     
+skip_x_update:
+
+    dex
+    dex                                             // x is now SP+1
+    consume_spaces(status_command)                  // read spaces until we get something else
+    lda text_buffer,y 
+    cmp #'-'
+    beq skip_y_update                               // if the text buffer char is -, keep stack pointer unchanged
+    jsr parse_hex_byte                              // load hex byte into A and increment y
+    sta $0100,x                                     
+skip_y_update:
+
+    consume_spaces(status_command)                  // read spaces until we get something else
+lda text_buffer,y 
+    cmp #'-'
+    beq skip_s_update                               // if the text buffer char is -, keep stack pointer unchanged
+    jsr parse_hex_byte                              // load hex byte into A and increment y
+    tax
+    txs                                
+skip_s_update:
+
+    jmp status_command
+
+
+
+/*
+Load command
+Loads a file over UART serial port
+*/
+load_command:
+    jsr uart.init
+
+//     set_vid_ptr(0, 0)
+
+// uart_loop:
+//     jsr uart.read_byte
+//     jsr vid.write_hex
+//     jmp uart_loop
+
+
+    set_vid_ptr(15, 0)
+    vid_write_string("loading")
+
+    uart_read_2(zp.mon_arg1)                        // read file size into mon_arg1
+    uart_read_2(zp.E)                               // read checksum in zp.E,F
+    uart_read_2(zp.mon_addr)                        // read start addr into mon_addr
+
+    set_vid_ptr(14, 0)
+
+    vid_write_string("A") 
+    lda zp.mon_addr+1
+    jsr vid.write_hex
+    lda zp.mon_addr
+    jsr vid.write_hex                          
+    inc zp.vid_ptr                         
+
+
+    vid_write_string("B")                           
+    lda zp.mon_arg1+1
+    jsr vid.write_hex
+    lda zp.mon_arg1
+    jsr vid.write_hex  
+    inc zp.vid_ptr       
+
+    vid_write_string("C") 
+    lda zp.E
+    jsr vid.write_hex
+    lda zp.F
+    jsr vid.write_hex    
+
+    uart_read_n_with_checksum(zp.mon_arg1, zp.mon_addr, zp.G)     // read n bytes and save checksum at zp.G,H
+
+    vid_write_string("=")                           
+    lda zp.G
+    jsr uart.write_byte                                           // send the checksum back as ack
+    jsr vid.write_hex
+    lda zp.G+1
+    jsr uart.write_byte
+    jsr vid.write_hex
+
+    set_vid_ptr(15, 0)
+    vid_write_string("done! run? (y/n)")
+
+get_yn_loop:
+    jsr kb.get_press
+    beq get_yn_loop
+
+    cmp #'y'
+    bne dont_run
+    jmp go
+dont_run:
+
+    jmp enter_reset
+
+
+
+/*
+Exit command
+Restores all registers and exits the monitor, returning to PC
+*/
+exit_command:
+    jsr restore_zp_registers                        // restore zp.B,C,D,...
+
+    ply
+    pla
+    plx                                             // restore A,X,Y
+
+    rti                                             // pop P and PC off of stack and return to PC 
+
+
+
+
+/* 
+Parse text into zp.mon_arg1 and zp.mon_addr starting at txt_ptr,y
+Also, print the address on the output line followed by a colon
+If we encounter a null before two bytes, set A to 0. Otherwise, set A to 1 
+*/
+parse_and_print_addr:
+    consume_spaces(exit_parse_print_addr)
+    
+    jsr parse_hex_byte                              // load hi hex byte into A and increment y
+    sta zp.mon_arg1+1                               // store the hi byte    
+    sta zp.mon_addr+1                               // store hi byte in mon addr
+    jsr vid.write_hex                               // display it in hex    
+    iny                                             // increment y again to go to start of next byte
+    
+    jsr parse_hex_byte                              // load lo hex byte into A and increment y
+    sta zp.mon_arg1                                 // store the lo byte    
+    sta zp.mon_addr                                 // store lo byte in mon addr
+    jsr vid.write_hex                               // display it in hex 
+
+    lda #':'
+    jsr vid.write_ascii                             // display colon
+    inc zp.vid_ptr
+    
+    lda #1
+exit_parse_print_addr:
+    rts
+
+
+/*
+Consume spaces in the text buffer. If we encounter a null, jump to null_branch.
+If we encounter anything else, fall through.
+*/
+.macro consume_spaces(null_branch) {
+loop:
     iny
     lda text_buffer,y                               // load the next char to check if it's non-null
-    beq print_after_write                           // if it's null, done writing. print the new data
-    cmp #' '                                        // if it's space, consume it and move on
-    beq write_byte
-    jsr parse_hex_byte                              // parse the next byte, incrementing y
-    sta (zp.mon_addr,x)                             // write the byte to mon addr pointer (x is 0)
-    inc zp.mon_addr                                 // increment address to write to
-    bne write_byte                                  // check if 0 after incrementing (if 0, need to carry)
-    inc zp.mon_addr+1                               // if mon_addr became 0 after inc, need to carry to hi byte
-    jmp write_byte   
-
-print_after_write:
-    pla                                             // get mon addr lo byte from stack
-    sta zp.mon_addr                                 // reset mon addr lo byte
-    pla                                             // get mon addr hi byte from stack
-    sta zp.mon_addr+1                               // reset mon addr hi byte
-    jmp print_8_bytes
-
-
+    bne next_cmp                                    
+    jmp null_branch                                 // if it's null, go to null branch
+next_cmp:
+    cmp #' '
+    beq loop                                        // if it's space, keep looping
+}
 
 
 /*
@@ -268,7 +582,7 @@ Redraw the prompt, clear the text buffer, and reset the vid and txt pointers
 reset_prompt:
     set_vid_ptr(15, 0)
     ldy #31
-    lda #vid.CURSOR_OFF
+    lda #' '
 
 reset_prompt_loop:
     sta (zp.vid_ptr),y
@@ -304,6 +618,14 @@ dec_vid_txt_ptrs:
     rts
 
 
+stash_zp_registers:
+    move_block(zp.B, zp_reg_stash, 16)
+    rts
+
+restore_zp_registers:
+    move_block(zp_reg_stash, zp.B, 16)
+    rts
+
 .macro set_txt_ptr(addr) {
     lda #(<addr)
     sta zp.txt_ptr                                  
@@ -337,7 +659,7 @@ irq:
 
     ror 
     bcc no_ca1_irq
-    kb_handle_irq()   
+    handle_kb_irq()   
 no_ca1_irq:
 
     ror
@@ -364,6 +686,8 @@ no_ca1_irq:
     bcc no_timer1_irq
     handle_cursor_timer_irq()
 no_timer1_irq:
+
+    // check_and_handle_uart_irq()
 
     ply
     pla

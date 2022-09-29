@@ -1,14 +1,14 @@
-#import "serial_load.sym"
+#import "video_mon.sym"
 
 .cpu _65c02
 .encoding "ascii"
 
-*=$1000							// start at address 1000
+*=$1000							// start at address 4321
 
-	lda #$00
-	sta VIDEO_PTR
-	lda #$70
-	sta VIDEO_PTR+1
+	lda #<vid.VRAM_START
+	sta zp.vid_ptr
+	lda #>vid.VRAM_START
+	sta zp.vid_ptr+1
 
 	ldx #0
 
@@ -17,18 +17,18 @@ hello:
 
 	lda message,x
 	beq done
-	jsr vid_write_ascii
-	jsr inc_vid_ptr
+	jsr vid.write_ascii
+	jsr vid.inc_vid_ptr
 	inx
 	jmp hello
 
 done:
-	jmp done
+	brk
 
 
 message:
 
-	.text "A new test"
+	.text "program upload worked!!!"
 	.byte $00 					// null terminated ascii
 
 

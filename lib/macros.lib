@@ -3,6 +3,7 @@
 .cpu _65c02
 .encoding "ascii"
 
+
 /* --------------------------------------------------------------------------------------- 
 Move one byte from address source to address target
 */
@@ -43,6 +44,7 @@ no_carry:
 }
 
 
+
 /* --------------------------------------------------------------------------------------- 
 Ensure arg is no greater than val
 */
@@ -52,7 +54,7 @@ Ensure arg is no greater than val
     cmp #(>val)                                         // check the high byte
     bcc done                                            // if high byte of arg is smaller, done
     bne clamp                                           // otherwise, if high byte of arg is bigger, clamp
-    lda #(<val)                                          // else, high bytes are equal
+    lda #(<val)                                         // else, high bytes are equal
     cmp arg                                             // check low byte
     bcs done                                            // if low byte of arg is >= val, done 
 clamp:
@@ -123,3 +125,26 @@ If no target is given, store the result in arg1
     and addr
     sta addr
 }
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Move a block of size bytes (at most 256) starting at source to target
+*/
+.macro @move_block(source, target, size) {
+    .if (size > $100) .error "Add 2-byte index support to move_block"
+    pha
+    phx
+    ldx #(size-1)
+
+loop:
+    lda source,x
+    sta target,x
+    dex
+    bpl loop
+
+    plx
+    pla            
+}
+
+

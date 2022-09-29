@@ -31,7 +31,7 @@ Zero page general-purpose addresses
 /*
 Block 1
 ------------------------------------
-Pointers, flags, and counters
+Pointers, flags, and counters for keyboard, video, and UART
 */
 .label kb_read_ptr = $10							// one byte
 .label kb_write_ptr = $11							// one byte
@@ -44,7 +44,11 @@ Pointers, flags, and counters
 .label vid_flags = $18 								// one byte
 .label mon_addr = $19 								// two bytes
 // $1a
-
+.label mon_arg1 = $1b 								// two bytes
+// $1c
+// .label uart_read_ptr = $1d							// one byte
+// .label uart_write_ptr = $1e							// one byte
+.label uart_flags = $1f								// one byte
 
 /*
 Block 2
@@ -52,3 +56,11 @@ Block 2
 Keyboard buffer
 */
 .label kb_buffer = $20    							// 16 bytes
+
+
+/*
+Block 3
+------------------------------------
+UART buffer
+*/
+// .label uart_buffer = $30    						// 16 bytes

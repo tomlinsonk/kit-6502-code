@@ -4,6 +4,8 @@
 #importonce
 .filenamespace kb
 
+#if !MACROS_ONLY
+
 
 #import "zp.lib"
 #import "via.lib"
@@ -22,6 +24,8 @@
 .label ASCII_TAB = $09
 .label ASCII_NEWLINE = $0a
 .label ASCII_ESC = $1b
+.label ASCII_SPACE = $20
+
 
 // keyboard scancodes
 .label K_RELEASE = $f0
@@ -45,7 +49,7 @@
 .label K_END = $69 | %10000000
 .label K_HOME = $6c | %10000000
 
-.var KB_BUFFER_SIZE = 16
+.label KB_BUFFER_SIZE = 16
 
 
 
@@ -185,23 +189,6 @@ not_modifier:
 }
 
 
-/* --------------------------------------------------------------------------------------- 
-Handle a keyboard interrupt. Store scancode in keyboard buffer
-*/
-
-.macro @kb_handle_irq() {
-    lda via.PORTA                                   // read scancode, clearing interrupt
-    ldx zp.kb_write_ptr
-    sta zp.kb_buffer,x                              // store keyboard scancode in buffer
-
-    inx                                             // increment write pointer
-    cpx #KB_BUFFER_SIZE                             // check if we've reached buffer size
-    bcc exit_irq_keyboard                           // if not, we're good to save it
-    ldx #0                                          // otherwise, reset to 0
-exit_irq_keyboard:
-    stx zp.kb_write_ptr                             // update keyboard write pointer
-}
-
 
 // Save some space by only storing the first half of the keymaps
 keymap:
@@ -224,3 +211,21 @@ keymap_shifted:
     .text @"??????\$08??1?47???"                    // 60-6F
     .text @"0.2568\$1b??+3-*9??"                    // 70-7F
  
+#endif
+
+
+/* --------------------------------------------------------------------------------------- 
+Handle a keyboard interrupt. Store scancode in keyboard buffer
+*/
+
+.macro @handle_kb_irq() {
+    ldy via.PORTA                                   // read scancode, clearing interrupt
+    ldx zp.kb_write_ptr
+    sty zp.kb_buffer,x                              // store keyboard scancode in buffer
+    inx                                             // increment write pointer
+    cpx #kb.KB_BUFFER_SIZE                          // check if we've reached buffer size
+    bcc exit_irq_keyboard                           // if not, we're good to save it
+    ldx #0                                          // otherwise, reset to 0
+exit_irq_keyboard:
+    stx zp.kb_write_ptr                             // update keyboard write pointer
+}
