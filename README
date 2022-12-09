@@ -1,22 +1,13 @@
-Compiled vasm with:
-make CPU=6502 SYNTAX=oldstyle
+Download Kick Assembler from http://theweb.dk/KickAssembler.
 
+Add the alias
+`alias ka='java -jar /path/to/KickAss.jar'`
 
-To run vasm:
-vasm6502_oldstyle -Fbin -dotdir source.s
-
-
-To run KickAss:
-ka -libdir ../../lib -binfile source.asm 
-
+To assemble a program for flashing to ROM:
+`ka -libdir ../../lib -binfile source.asm` 
 
 To program EEPROM:
-minipro -p AT28C256 -w source.out
-
+`minipro -p AT28C256 -w source.bin`
 
 To read EEPROM:
 minipro -p AT28C256 -r rom.bin
-
-
-To open serial port:
-screen /dev/cu.SLAB_USBtoUART 4800
