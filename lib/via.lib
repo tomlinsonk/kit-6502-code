@@ -14,13 +14,17 @@
 .label IER = $781e
 .label T1_LO = $7814
 .label T1_HI = $7815
+.label T2_LO = $7818
+.label T2_HI = $7819
 .label ACR = $781b
 
 // VIA interrupt bits
 .label CA1_INT = %00000010
 .label TIMER1_INT = %01000000
+.label TIMER2_INT = %00100000
 .label INT_ENABLE = %10000000
 .label CA1_RISING = %00000001
 
 // VIA auxiliary control register bits
 .label T1_CONTINUOUS = %01000000
+.label T2_ONE_SHOT = %00000000

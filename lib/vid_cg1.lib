@@ -1,0 +1,246 @@
+#importonce
+.filenamespace vid_cg1
+
+.cpu _65c02
+.encoding "ascii"
+
+#if !MACROS_ONLY
+
+#import "via.lib"
+#import "zp.lib"
+#import "macros.lib"
+
+// Video addresses
+.label VRAM_START = $7000
+.label VRAM_END = $7fff
+.label VRAM_CG1_END = $73ff
+
+.label GREEN = 0
+.label YELLOW = 1
+.label BLUE = 2
+.label RED = 3
+
+.label stash = zp.cg1_0
+.label new_color = zp.cg1_1
+
+
+/* --------------------------------------------------------------------------------------- 
+Color Graphics One.
+Draw the color in A (bottom two bits: 00 = green, 01 = yellow, 10 = blue, 11 = red) to the coordinates
+in X and Y (X: column 0 - 63, Y: row 0 - 63)
+*/
+write_pixel: {
+    phx
+    phy
+    pha
+
+    tya                                                         // load row into A
+    ror
+    ror
+    ror
+    ror                                                         // divide by 16
+    and #%00001111
+    ora #>vid.VRAM_START                                        // add vram start hi byte (%01110000)
+    sta zp.vid_ptr+1                                            // store in vid pointer hi byte
+
+    tya                                                         // load row into A
+    and #%00001111                                              // take mod 16
+    asl
+    asl
+    asl
+    asl                                                         // shift into high nibble
+    sta stash                                                   // stash high nibble
+
+    txa                                                         // load col into A
+    ror
+    ror                                                         // divide by 4
+    and #%00001111                                              // zero out high nibble
+    ora stash                                                   // combine with high nibble
+    sta zp.vid_ptr                                              // store in vid pointer low byte
+
+    ldy #0
+    lda (zp.vid_ptr),y                                          // load current 4 pixels
+    sta stash                                                   // stash in B
+
+    txa                                                         // load col into A
+    ror                                                         // shift bottom bit into carry
+
+    bcc bits_x0
+bits_x1:
+    ror
+    bcc bits_01
+bits_11:                                                        // col bottom bits are 11. A already good (last bit pair)
+    pla
+    pha
+    sta new_color
+    lda #%11111100                                              // put new pixel in X and mask in A
+    jmp save_pixel                                                  
+
+bits_x0:
+    ror
+    bcc bits_00
+bits_10:                                                        // col bits are 10. Shift A left two bits
+    pla
+    pha
+    asl
+    asl
+    sta new_color
+    lda #%11110011                                              // put new pixel in X and mask in A
+    jmp save_pixel  
+    
+bits_01:                                                        // col bits are 01. Shift A left four bits
+    pla
+    pha
+    asl
+    asl
+    asl
+    asl
+    sta new_color
+    lda #%11001111                                              // put new pixel in X and mask in A
+    jmp save_pixel 
+
+bits_00:                                                        // col bits are 00. Shift A left six bits
+    pla
+    pha
+    ror     
+    ror
+    ror
+    and #%11000000                                              // 3 rors + zero out bottom 6 bits = 6 asls
+    sta new_color
+    lda #%00111111                                              // put new pixel in X and mask in A 
+    jmp save_pixel 
+    
+save_pixel:
+    and stash                                                    // zero out new pixels
+    ora new_color                                                    // add in new pixels
+    sta (zp.vid_ptr),y                                          // save new byte to VRAM (y still 0)                                                        
+
+    pla
+    ply
+    plx
+    rts
+}
+
+/* --------------------------------------------------------------------------------------- 
+Color Graphics One.
+Read the pixel in coordinates X and Y (X: column 0 - 63, Y: row 0 - 63) into the bottom two bits of A
+*/
+read_pixel: {
+    phx
+    phy
+
+    tya                                                         // load row into A
+    ror
+    ror
+    ror
+    ror                                                         // divide by 16
+    and #%00001111
+    ora #>vid.VRAM_START                                        // add vram start hi byte (%01110000)
+    sta zp.vid_ptr+1                                            // store in vid pointer hi byte
+
+    tya                                                         // load row into A
+    and #%00001111                                              // take mod 16
+    asl
+    asl
+    asl
+    asl                                                         // shift into high nibble
+    sta stash                                                    // stash high nibble
+
+    txa                                                         // load col into A
+    ror
+    ror                                                         // divide by 4
+    and #%00001111                                              // zero out high nibble
+    ora stash                                                    // combine with high nibble
+    sta zp.vid_ptr                                              // store in vid pointer low byte
+
+    ldy #0
+    lda (zp.vid_ptr),y                                          // load current 4 pixels
+    sta stash                                                    // stash the 4 pixels containing our pixel of interest
+
+    txa                                                         // load col into A
+    ror                                                         // shift bottom bit into carry
+
+    bcc bits_x0
+bits_x1:
+    ror
+    bcc bits_01
+bits_11:                                                        // col bottom bits are 11. Pixel is last bit pair of stash
+    lda stash                                                    // pick out bottom two bits of stash
+    jmp return                                                  
+
+bits_x0:
+    ror
+    bcc bits_00
+bits_10:                                                        // col bits are 10. Pixel is bits 3 and 2 of stash.
+    lda stash
+    ror
+    ror                                                         // Shift stash right two bits
+    jmp return  
+    
+bits_01:                                                        // col bits are 01. Pixel is bits 5 and 4 of stash
+    lda stash
+    ror
+    ror
+    ror
+    ror
+    jmp return 
+
+bits_00:                                                        // col bits are 00. Shift A left six bits
+    lda stash
+    rol
+    rol
+    rol
+    jmp return
+
+return:
+
+    ply
+    plx
+    and #%00000011                                              // zero out everything except bottom two bits
+    rts
+}
+
+
+#endif
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Fill the screen with a solid color
+*/
+.macro @fill_vid_screen_cg1(color) {
+    .var color_byte = color + (color << 2) + (color << 4) + (color << 6) 
+
+    pha
+    phx
+    phy
+
+    lda #<VRAM_START
+    sta zp.vid_ptr
+    lda #>VRAM_START
+    sta zp.vid_ptr+1
+
+    stz vid_cg1.stash
+    ldx #4
+    lda #color_byte
+    ldy #0
+
+    jmp no_carry
+
+clear_loop:
+    inc zp.vid_ptr
+    bne no_carry
+    inc zp.vid_ptr+1
+no_carry:
+    sta (zp.vid_ptr),y
+    inc vid_cg1.stash
+    bne clear_loop
+    dex
+    bpl clear_loop
+
+    ply
+    plx
+    pla
+}
+
+

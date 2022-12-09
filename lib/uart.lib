@@ -10,17 +10,17 @@
 #import "macros.lib"
 
 // UART addresses
-.label RBR = $7820											// receiver buffer register (read only)
-.label THR = $7820                                          // transmitter holding register (write only)
-.label IER = $7821                                          // interrupt enable register
-.label IIR = $7822                                          // interrupt identification register
-.label FCR = $7822                                          // FIFO control register
-.label LCR = $7823                                          // line control register
-.label MCR = $7824                                          // modem control register
-.label LSR = $7825                                          // line status register
-.label MSR = $7826                                          // modem status register
-.label DLL = $7820                                      	// divisor latch LSB (if DLAB=1)
-.label DLM = $7821											// divisor latch MSB (if DLAB=1)
+.label RBR = $7a20											// receiver buffer register (read only)
+.label THR = $7a20                                          // transmitter holding register (write only)
+.label IER = $7a21                                          // interrupt enable register
+.label IIR = $7a22                                          // interrupt identification register
+.label FCR = $7a22                                          // FIFO control register
+.label LCR = $7a23                                          // line control register
+.label MCR = $7a24                                          // modem control register
+.label LSR = $7a25                                          // line status register
+.label MSR = $7a26                                          // modem status register
+.label DLL = $7a20                                      	// divisor latch LSB (if DLAB=1)
+.label DLM = $7a21											// divisor latch MSB (if DLAB=1)
 
 
 // FCR (FIFO Control) constants
@@ -59,6 +59,10 @@
 .label DIV_4800_LO = 13
 .label DIV_4800_HI = 0
 
+.label DIV_57600_LO = 2
+.label DIV_57600_HI = 0
+
+
 // zp.uart_flag bits
 .label ERROR_FLAG = %10000000
 .label OVERRUN_FLAG = %10000000
@@ -86,6 +90,38 @@ init:
     sta DLL                                            		// store divisor low byte (4800 baud @ 1 MHz clock)
 
     lda #DIV_4800_HI                                       
+    sta DLM                                            		// store divisor hi byte
+
+    lda #LCR_8N1
+    sta LCR                                            		// set 8 data bits, 1 stop bit, no parity, disable DLAB
+
+    lda #FIFO_ENABLE
+    sta FCR                                            		// enable the UART FIFO
+
+    lda #POLLED_MODE
+    sta IER                                            		// disable all interrupts
+
+    // stz zp.uart_read_ptr
+    // stz zp.uart_write_ptr
+
+    pla
+    rts
+
+
+/* --------------------------------------------------------------------------------------- 
+Initialize the UART
+Uses 8n1 mode with no FIFO and 57600 baud @ 1.8...MHz clock
+*/
+init_57600:
+	pha
+
+	lda #DLAB
+    sta LCR                                            		// set the divisor latch access bit (DLAB)
+
+    lda #DIV_57600_LO
+    sta DLL                                            		// store divisor low byte (4800 baud @ 1 MHz clock)
+
+    lda #DIV_57600_LO                                       
     sta DLM                                            		// store divisor hi byte
 
     lda #LCR_8N1

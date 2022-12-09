@@ -6,7 +6,7 @@
 .label text_buffer = $0200                          // 31 bytes (0200-021f)
 .label text_buffer_end = $021e                            
 .label zp_reg_stash = $0220                         // 16 bytes
-
+.label irq_addr_stash = $0230                       // 2 bytes
 
 
 // RAM labels
@@ -24,10 +24,15 @@ jump_table:
 #import "vid.lib"
 #import "lcd.lib"
 #import "uart.lib"
+#import "vid_cg1.lib"
+
 
 
 reset:
+    sei
+    mov2 #irq : zp.irq_addr                         // set up irq handler
     cli
+
     cld
 
     jsr kb.init
@@ -46,9 +51,14 @@ loop:
     jmp loop
 
 
-start_mon:                                              
+start_mon:    
     // Stack has R_HI, R_LO, P, X, A, Y <
+
+    sei                                
     jsr stash_zp_registers
+    mov2 #irq : zp.irq_addr                         // set up irq handler
+    cli   
+
     jsr reset_prompt
 
 mon_loop:
@@ -185,7 +195,7 @@ print_data:
     inc zp.vid_ptr
     lda (zp.mon_addr,x)                             // load the data at address mon_addr into A// x is still 0
     jsr vid.write_hex                               // display it
-    inc2 zp.mon_addr                                 // increment address to print
+    inc2 zp.mon_addr                                // increment address to print
 addr_no_carry:
     dey                                             // decrement number of bytes left to print
     bne print_data                                  // if it's not zero, keep printing
@@ -620,10 +630,12 @@ dec_vid_txt_ptrs:
 
 stash_zp_registers:
     move_block(zp.B, zp_reg_stash, 16)
+    mov2 zp.irq_addr : irq_addr_stash
     rts
 
 restore_zp_registers:
     move_block(zp_reg_stash, zp.B, 16)
+    mov2 irq_addr_stash : zp.irq_addr
     rts
 
 .macro set_txt_ptr(addr) {
@@ -678,9 +690,11 @@ no_ca1_irq:
 // no_cb1_irq:
 
     ror
-//     bcc no_timer2_irq
-//     handle_timer2_irq()
-// no_timer2_irq:
+    bcc no_timer2_irq
+    stz via.T2_LO                                                   // write zeros to timer 2 lo
+    ldx #$ff
+    stx via.T2_HI 
+no_timer2_irq:
 
     ror
     bcc no_timer1_irq
@@ -695,7 +709,10 @@ no_timer1_irq:
     rti
 
 
+raw_irq:
+    jmp (zp.irq_addr)
 
-*=$fffc                                         // the CPU reads address $fffc to read start of program address
-    .word reset                               // reset address
-    .word irq                                 // IRQ handler address
+
+*=$fffc                                             // the CPU reads address $fffc to read start of program address
+    .word reset                                     // reset address
+    .word raw_irq                                   // IRQ handler address

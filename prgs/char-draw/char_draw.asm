@@ -1,5 +1,6 @@
 .cpu _65c02
 .encoding "ascii"
+.filenamespace char_draw
 
 #import "video_mon.sym"
 
@@ -14,7 +15,6 @@
 .label draw_buffer_end = char_draw.draw_buffer + (32 * 14)
 
 .segment Code [outPrg="char_draw.prg", start=$1000] 
-.namespace char_draw {	
 	.label draw_ptr = zp.B
 
 	fill_vid_screen(EMPTY_CHAR)
@@ -25,7 +25,9 @@
 	stz curr_shape
 	stz curr_x
 	stz curr_y
-	stz curr_char
+
+	lda #EMPTY_CHAR
+	sta curr_char
 
 
 	lda #<draw_buffer
@@ -100,6 +102,11 @@ not_down:
 	sta (draw_ptr),y
 not_space:
 
+	cpy #kb.ASCII_NEWLINE
+	bne not_enter
+	jsr send_draw_buffer
+not_enter:
+
 
 	jmp input_loop
 
@@ -154,7 +161,7 @@ set_color:
 new_color:
 	tay
 	pha
-	set_vid_ptr(15, 23)
+	set_vid_ptr(15, 24)
 
 	lda (zp.vid_ptr),y
 	ora #%01000000
@@ -211,7 +218,7 @@ draw_palette:
 set_vid_ptr(15, 0)
 	vid_write_string(@"\$11234567890qwerty")
 
-	set_vid_ptr(14, 23)
+	set_vid_ptr(14, 24)
 
 	ldx #8
 	lda #%10001111
@@ -224,7 +231,7 @@ draw_colors_loop:
 	dex
 	bne draw_colors_loop
 
-	set_vid_ptr(15, 23)
+	set_vid_ptr(15, 24)
 	vid_write_string("Zxcvbnm,")
 
 	rts
@@ -282,6 +289,42 @@ fill_loop2:
 	rts
 
 
+/* --------------------------------------------------------------------------------------- 
+Send the draw buffer over UART
+*/
+send_draw_buffer:
+	pha
+	phy
+	phx
+
+	ldy #2
+	ldx #0
+send_loop:
+	lda draw_buffer,x
+	jsr uart.write_byte
+	inx
+	bne send_loop
+	dey
+	bne send_loop
+
+	set_vid_ptr(15, 18)
+	vid_write_string("sent")
+
+wait_for_press:
+	jsr kb.get_press
+	beq wait_for_press
+
+	set_vid_ptr(15, 18)
+	vid_write_string(@"\$80\$80\$80\$80")
+	update_vid_ptr()
+
+	plx
+	ply
+	pla
+	rts
+
+
+
 curr_color:
 	.byte $00
 
@@ -315,15 +358,15 @@ draw_buf_row_starts:
 
 *=$1400
 draw_buffer:
-}
+
 
 .macro update_vid_ptr() {
-	ldy char_draw.curr_y
-	lda char_draw.vram_row_starts.lo,y
+	ldy curr_y
+	lda vram_row_starts.lo,y
 	clc
-	adc char_draw.curr_x
+	adc curr_x
 	sta zp.vid_ptr
-	lda char_draw.vram_row_starts.hi,y
+	lda vram_row_starts.hi,y
 	sta zp.vid_ptr+1	
 }
 
@@ -334,13 +377,13 @@ draw_buffer:
 
 	update_vid_ptr()
 
-	ldy char_draw.curr_y
-	lda char_draw.draw_buf_row_starts.lo,y
+	ldy curr_y
+	lda draw_buf_row_starts.lo,y
 	clc
-	adc char_draw.curr_x
-	sta char_draw.draw_ptr
-	lda char_draw.draw_buf_row_starts.hi,y
-	sta char_draw.draw_ptr+1	
+	adc curr_x
+	sta draw_ptr
+	lda draw_buf_row_starts.hi,y
+	sta draw_ptr+1	
 
 	ply
 	pla

@@ -49,46 +49,6 @@ init_cursor:
 
 	rts
 
-// /* --------------------------------------------------------------------------------------- 
-// Handle the cursor timer irq. Increments cursor blink count
-// */
-// .macro @handle_cursor_timer_irq() {
-// 	ldx via.T1_LO                       			// clear timer 1 interrupt by reading lo t1 byte
-//     inc zp.cursor_blink_count          				// increment the blink counter			
-// }
-
-
-// /* --------------------------------------------------------------------------------------- 
-// Write the "on" character if the cursor should be on and the "off" character otherwise.
-// Only writes if the cursor is in the wrong state, based on bit 0 of zp.vid_flags
-// */
-// .pseudocommand @blink_cursor on : off {
-//     bbr3 zp.cursor_blink_count,cursor_off           // if bit 3 of blink count is 0, turn off cursor
-//     bbs0 zp.vid_flags,done                          // if cursor is on, skip writing
-//     smb0 zp.vid_flags                               // store cursor on
-//     lda on                                          // otherwise, load cursor char
-//     jsr write_ascii
-//     jmp done
-// cursor_off:
-//     bbr0 zp.vid_flags,done                          // if cursor is off, skip writing
-//     rmb0 zp.vid_flags                               // store cursor off
-//     lda off                                         // load character under cursor
-//     jsr vid.write_ascii
-// done:
-// }
-
-
-// /* --------------------------------------------------------------------------------------- 
-// Force the cursor on if it should be on (useful when the cursor moves in the on state)
-// */
-// .macro @force_cursor_update() {
-//     bbr3 zp.cursor_blink_count,done                 // if bit 3 of blink count is 0, cursor is off
-//     smb0 zp.vid_flags                               // store cursor on
-//     lda #CURSOR_ON                                          // otherwise, load cursor char
-//     jsr write_ascii
-// done:
-// }
-
 
 /* --------------------------------------------------------------------------------------- 
 Blank the screen in text mode
@@ -147,31 +107,6 @@ video_write:
     pla
     rts
 
-
-// /* --------------------------------------------------------------------------------------- 
-// write the ascii char in A to the address in the video pointer
-// writes upper case as inverted, assuming data bit 6 in text mode is INV.
-// Also increments vid pointer to after the string
-// */
-// .macro @vid_write_string(string) {
-//     .if (string.size() == 1) {
-//         lda #string.charAt(0)
-//         jsr write_ascii
-//         inc_vid_ptr()
-//     } else {
-//         phx
-//         ldx #0
-// loop:   lda data,x
-//         beq done  
-//         jsr write_ascii
-//         inc_vid_ptr()
-//         inx
-//         jmp loop
-// data:   .text string
-//         .byte $00
-// done:   plx
-//     }          
-// }
 
 /* --------------------------------------------------------------------------------------- 
 write the number in A to the address in the video pointer
@@ -232,114 +167,12 @@ inc_vid_ptr:
     inc_vid_ptr()
     rts
 
-// .macro @inc_vid_ptr() {
-// 	inc zp.vid_ptr                                  // increment the video pointer
-//     bne exit_inc_ptr                                // check if it became 0 when incremented. If not, we're good to return
-//     inc zp.vid_ptr+1                                // also carry to hi byte of video ptr
-//     bbr1 zp.vid_ptr+1,exit_inc_ptr     				// if 2s bit of hi byte is 0, we're good to return
-//     rmb1 zp.vid_ptr+1                               // otherwise, we're passing 512 chars and need to reset to 0
-// exit_inc_ptr:		
-// }
-
-
 /* --------------------------------------------------------------------------------------- 
 decrement the video pointer, wrapping from 0 to 512
 */
 dec_vid_ptr:
     dec_vid_ptr()
     rts
-
-// .macro dec_vid_ptr() {
-//     pha
-//     dec zp.vid_ptr                                  // decrement the video pointer
-//     lda #$ff
-//     cmp zp.vid_ptr                                  // check if we carried
-//     bne exit_dec_video_ptr                          // if not, good to return
-//     dec zp.vid_ptr+1                                // if we did carry, decrement hi byte
-//     lda zp.vid_ptr+1                                // load the video pointer hi byte
-//     cmp #>VRAM_START                                // compare with smallest valid hi byte for VRAM
-//     bcs exit_dec_video_ptr                          // if video pointer hi byte is >=, can return
-//     lda #>VRAM_TXT_END                              // otherwise, reset it to end of screen
-//     sta zp.vid_ptr+1
-// exit_dec_video_ptr:
-//     pla
-// }
-
-
-// /* --------------------------------------------------------------------------------------- 
-// Shift everything on the display up by n rows, skipping the bottom skip rows.
-// Moves the video pointer, and uses zp.B, zp.C as stash
-// */
-// .macro @shift_vid_up(n, skip) {
-// 	set_vid_ptr(0, 0)
-// 	lda #<VRAM_START + (mod(n, 8) * 32)
-// 	sta zp.B
-// 	lda #>VRAM_START + floor(n / 8) 
-// 	sta zp.B+1
-
-// 	ldx #(16 - n - skip)
-// shift_row_loop:
-// 	ldy #31
-
-// shift_col_loop:
-//     lda (zp.B),y
-//     sta (zp.vid_ptr),y                             // copy row into previous row
-//     dey
-//     bpl shift_col_loop
-
-//     lda zp.B
-//     clc
-//     adc #32                                        // add 32 to stash ptr
-//     sta zp.B
-//     bcc no_inc_stash_hi
-//     inc zp.B+1
-
-// no_inc_stash_hi:
-//     lda zp.vid_ptr
-//     clc
-//     adc #32                                        // add 32 to vid pointer
-//     sta zp.vid_ptr
-//     bcc no_inc_vid_hi
-//     inc zp.vid_ptr+1
-
-// no_inc_vid_hi:
-//     dex
-//     bne shift_row_loop
-	
-// }
-
-
-// /* --------------------------------------------------------------------------------------- 
-// Set the video pointer to a specific row and col in text mode.
-// Row should be in [0, 15]
-// Col should be in [0, 31] 
-// */
-// .macro @set_vid_ptr(row, col) {
-// 	lda #((<VRAM_START) + (mod(row, 8) * 32 + col))   // load the low byte of the new video pointer
-//     sta zp.vid_ptr
-// 	lda #((>VRAM_START) + floor(row / 8)) 			  // load the hi byte of the new video pointer
-//     sta zp.vid_ptr + 1
-// }
-
-
-// /* --------------------------------------------------------------------------------------- 
-// Fill a row with a character
-// */
-// .macro @fill_vid_row(row, char) {
-//     pha
-//     phy
-//     set_vid_ptr(row, 0)
-//     lda #char
-//     ldy #32
-// loop:
-//     jsr write_ascii
-//     inc zp.vid_ptr
-//     dey
-//     bne loop
-
-//     ply
-//     pla
-// }
 
 #endif
 

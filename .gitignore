@@ -1,5 +1,5 @@
-*.prg
-*.sym
-*.bin
-*.DS_Store
-
+**/*.prg
+**/*.sym
+**/*.bin
+**/.DS_Store
+.idea

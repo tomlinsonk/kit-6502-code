@@ -1,0 +1,22 @@
+Compiled vasm with:
+make CPU=6502 SYNTAX=oldstyle
+
+
+To run vasm:
+vasm6502_oldstyle -Fbin -dotdir source.s
+
+
+To run KickAss:
+ka -libdir ../../lib -binfile source.asm 
+
+
+To program EEPROM:
+minipro -p AT28C256 -w source.out
+
+
+To read EEPROM:
+minipro -p AT28C256 -r rom.bin
+
+
+To open serial port:
+screen /dev/cu.SLAB_USBtoUART 4800
