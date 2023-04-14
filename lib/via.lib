@@ -4,7 +4,14 @@
 .cpu _65c02
 .encoding "ascii"
 
-// VIA addresses
+/*
+VIA addresses
+
+Note: 
+breadboard version uses 7810 - 781F for VIA
+PCB version uses        7800 - 78FF for VIA 1
+PCB version is compatible!
+*/
 .label PORTA = $7811
 .label PORTB = $7810
 .label DDA = $7813
@@ -28,3 +35,24 @@
 // VIA auxiliary control register bits
 .label T1_CONTINUOUS = %01000000
 .label T2_ONE_SHOT = %00000000
+
+
+/*
+VIA2 for PCB
+PORTA_2 -> PORTC
+PORTB_2 -> PORTD
+*/
+#if PCB
+.label PORTC = $7901
+.label PORTD = $7900
+.label DDC = $7903
+.label DDD = $7902
+.label PCR_2 = $790c
+.label IFR_2 = $790d
+.label IER_2 = $790e
+.label T1_LO_2 = $7904
+.label T1_HI_2 = $7905
+.label T2_LO_2 = $7908
+.label T2_HI_2 = $7909
+.label ACR_2 = $790b
+#endif

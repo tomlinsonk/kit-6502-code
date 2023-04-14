@@ -11,9 +11,32 @@
 #import "macros.lib"
 
 // Video addresses
-.label VRAM_START = $7000
-.label VRAM_END = $7fff
-.label VRAM_TXT_END = $71ff
+#if !PCB
+    .label VRAM_START = $7000
+    .label VRAM_END = $7fff
+    .label VRAM_TXT_END = $71ff
+#else 
+    .label VRAM_START = $6000
+    .label VRAM_END = $77ff
+    .label VRAM_TXT_END = $61ff
+    .label MODE_REG = via.PORTC
+    .label MODE_REG_DIR = via.DDC
+
+    .label MODE_TEXT = %00000000
+    .label MODE_SG6 = %00100000
+    .label MODE_CG1 = %00000001
+    .label MODE_RG1 = %00000011
+    .label MODE_CG2 = %00000101
+    .label MODE_RG2 = %00000111
+    .label MODE_CG3 = %00001001
+    .label MODE_RG3 = %00001011
+    .label MODE_CG6 = %00001101
+    .label MODE_RG6 = %00001111
+
+
+#endif
+
+
 
 // Characters
 .label CURSOR_ON = %10001111
@@ -23,6 +46,11 @@
 Initialize the display
 */
 init:
+#if PCB
+    lda #$ff
+    sta MODE_REG_DIR
+#endif
+
 	jsr blank_screen
 	set_vid_ptr(0, 0)
 	stz zp.cursor_blink_count
@@ -109,6 +137,30 @@ video_write:
 
 
 /* --------------------------------------------------------------------------------------- 
+write the null-terminated ASCII string at address in zp.B, zp.C 
+to the address in the vid pointer. Increments vid_ptr
+*/
+write_string: {
+    phy
+    pha
+    ldy #0
+loop:   
+    lda (zp.B),y
+    beq done  
+    jsr vid.write_ascii
+    inc_vid_ptr()
+    iny
+    jmp loop
+
+done:
+    pla
+    ply
+
+    rts
+}
+
+
+/* --------------------------------------------------------------------------------------- 
 write the number in A to the address in the video pointer
 also increment vid ptr twice
 */
@@ -174,6 +226,37 @@ dec_vid_ptr:
     dec_vid_ptr()
     rts
 
+
+/* --------------------------------------------------------------------------------------- 
+Shift every row up 1
+*/
+shift_up_1:
+    shift_vid_up(1, 0)
+    rts
+
+
+/* --------------------------------------------------------------------------------------- 
+Shift every row up 1 and clear the bottom row
+*/
+shift_up_1_clear_bottom:
+    jsr shift_up_1
+    fill_vid_row(15, ' ')
+    set_vid_ptr(15, 0)
+    rts
+
+/* --------------------------------------------------------------------------------------- 
+The the vid pointer to the beginning of row in Y (0...15)
+*/
+set_row:
+    lda vram_row_starts.lo,y
+    sta zp.vid_ptr
+    lda vram_row_starts.hi,y
+    sta zp.vid_ptr+1   
+    rts 
+    
+vram_row_starts:
+    .lohifill 16,vid.VRAM_START+i*32
+
 #endif
 
 
@@ -221,7 +304,7 @@ done:
 
 
 /* --------------------------------------------------------------------------------------- 
-write the ascii char in A to the address in the video pointer
+write the string to the address in the video pointer
 writes upper case as inverted, assuming data bit 6 in text mode is INV.
 Also increments vid pointer to after the string
 */
@@ -379,3 +462,85 @@ loop:
     ply
     pla
 }
+
+
+#if PCB
+.macro @set_vid_mode_text() {
+    pha
+    lda #MODE_TEXT
+    sta MODE_REG
+    pla
+}
+
+.macro @set_vid_mode_sg6() {
+    pha
+    lda #MODE_SG6
+    sta MODE_REG
+    pla
+}
+
+.macro @set_vid_mode_cg1() {
+    pha
+    lda #MODE_CG1
+    sta MODE_REG
+    pla
+}
+
+.macro @set_vid_mode_rg1() {
+    pha
+    lda #MODE_RG1
+    sta MODE_REG
+    pla
+}
+
+
+.macro @set_vid_mode_cg2() {
+    pha
+    lda #MODE_CG2
+    sta MODE_REG
+    pla
+}
+
+
+.macro @set_vid_mode_rg2() {
+    pha
+    lda #MODE_RG2
+    sta MODE_REG
+    pla
+}
+
+
+
+.macro @set_vid_mode_cg3() {
+    pha
+    lda #MODE_CG3
+    sta MODE_REG
+    pla
+}
+
+
+.macro @set_vid_mode_rg3() {
+    pha
+    lda #MODE_RG3
+    sta MODE_REG
+    pla
+}
+
+
+
+.macro @set_vid_mode_cg6() {
+    pha
+    lda #MODE_CG6
+    sta MODE_REG
+    pla
+}
+
+.macro @set_vid_mode_rg6() {
+    pha
+    lda #MODE_RG6
+    sta MODE_REG
+    pla
+}
+
+
+#endif

@@ -35,8 +35,7 @@
 .label K_ENTER = $5a
 .label K_L_SHIFT = $12
 .label K_R_SHIFT = $59
-.label K_F11 = $78
-.label K_F12 = $07
+
 .label K_EXTENDED = $e0
 
 // extended scancodes, with bit 7 set
@@ -48,6 +47,21 @@
 .label K_PG_UP = $7d | %10000000
 .label K_END = $69 | %10000000
 .label K_HOME = $6c | %10000000
+
+// pseudo-extended scancodes for additional modifiers
+// These are hardcoded into the keymaps to translate PS/2 scancodes into these custom pseudo-extended codes
+.label K_F1 = $81
+.label K_F2 = $82
+.label K_F3 = $83
+.label K_F4 = $84
+.label K_F5 = $85
+.label K_F6 = $86
+.label K_F7 = $87
+.label K_F8 = $88
+.label K_F9 = $89
+.label K_F10 = $8a
+.label K_F11 = $8b
+.label K_F12 = $8c
 
 .label KB_BUFFER_SIZE = 16
 
@@ -106,14 +120,14 @@ has_scancode:
     cpy #K_EXTENDED                                 // check for the extended scancode
     bne not_extended
     set_bits(zp.kb_flags, EXTENDED_NXT)             // if it is extended scancode, set the extended flag
-    update_read_ptr()                               // update the read pointer 
+    update_kb_read_ptr()                               // update the read pointer 
     jmp read_from_buffer                            // consume the next scancode in the buffer to get real keypress
 not_extended:
 
     cpy #K_RELEASE                                  // check for the release scancode
     bne not_release
     set_bits(zp.kb_flags, RELEASE_NXT)              // if it is release scancode, set the release flag
-    update_read_ptr()                               // update the read pointer 
+    update_kb_read_ptr()                               // update the read pointer 
     jmp read_from_buffer                            // consume the next scancode in the buffer to get real keypress
 not_release:
 
@@ -126,7 +140,7 @@ not_release:
     beq not_released_key
 released_key:
     clear_bits(zp.kb_flags, RELEASE_NXT | EXTENDED_NXT)  // clear the released and extended flags
-    update_read_ptr()
+    update_kb_read_ptr()
     jmp read_from_buffer                            // consume the next scancode in the buffer to get real keypress
 not_released_key:
 
@@ -140,11 +154,16 @@ not_extended_key:
 
     cpy #$80                                        // make sure the scancode has bit 7 clear
     bcc valid_scancode                              // if scancode is < $80, then it's valid
+    cpy #$83                                        // check for F7 key, which has scancode $83 for some reason
+    bne unknown_scancode                            // if scancode is not F7 and >= $80, then it's weird
+    lda #K_F7                                       // manually load in F7 pseudoextended code
+    jmp inc_read_ptr
+
+unknown_scancode:
     lda #$ff                                        // otherwise, it's a weird scancode. Put $ff in A
     jmp inc_read_ptr
 
 valid_scancode:
-    
     bit #(R_SHIFT_DOWN | L_SHIFT_DOWN)              // check if either shift is down
     beq shift_up                                    // if not, branch
     lda keymap_shifted,y                            // if shift down, load shifted ascii into A
@@ -154,62 +173,35 @@ shift_up:
     lda keymap,y                                    // load unshifted ascii into A
 
 inc_read_ptr:
-    update_read_ptr()
+    update_kb_read_ptr()                            // Increment the read pointer stored in register X and save it, wrapping at buffer size
 get_press_done:
-    plx
     ply
+    plx
     ora #%00000000                                  // set zero flag if A is 0 and negative flag if A is negative
     rts
-
-// Increment the read pointer stored in register X and save it, wrapping at buffer size
-.macro update_read_ptr() {
-    inx
-    cpx #KB_BUFFER_SIZE
-    bcc store_read_ptr                              // if KB_READ_PTR reached buffer size, reset to 0
-    ldx #0
-store_read_ptr:
-    stx zp.kb_read_ptr  
-}
-
-// Check for and handle a modifier scancode. Flips the modifier's flag and then tries to get a real press
-.macro handle_modifier(scancode, flag) {
-    cpy #scancode                                   // check for the modifier's scancode
-    bne not_modifier
-    lda zp.kb_flags                                 // check if modifier is being released 
-    bit #RELEASE_NXT
-    bne modifier_released
-    set_bits(zp.kb_flags, flag)                     // if modifier is being pressed, set flag
-    bra modifier_done                               // and jump to done
-modifier_released:
-    clear_bits(zp.kb_flags, flag | RELEASE_NXT | EXTENDED_NXT) // if modifier is being released, clear flags
-modifier_done:
-    update_read_ptr()                               // update read pointer
-    jmp read_from_buffer                            // and try to get a real keypress
-not_modifier:
-}
 
 
 
 // Save some space by only storing the first half of the keymaps
 keymap:
-    .text @"?????????????\$09`?"                    // 00-0F
+    .text @"?\$89?\$85\$83\$81\$82\$8c?\$8a\$88\$86\$84\$09`?"                    // 00-0F
     .text "?????q1???zsaw2?"                        // 10-1F
     .text "?cxde43?? vftr5?"                        // 20-2F
     .text "?nbhgy6???mju78?"                        // 30-3F
     .text "?,kio09??./l;p-?"                        // 40-4F
     .text @"??'?[=????\$0a]?\\??"                   // 50-5F
     .text @"??????\$08??1?47???"                    // 60-6F
-    .text @"0.2568\$1b??+3-*9??"                    // 70-7F
+    .text @"0.2568\$1b?\$8b+3-*9??"                 // 70-7F
 
 keymap_shifted:
-    .text @"?????????????\$09~?"                    // 00-0F
+    .text @"?\$89?\$85\$83\$81\$82\$8c?\$8a\$88\$86\$84\$09~?"                    // 00-0F
     .text "?????Q!???ZSAW@?"                        // 10-1F
     .text "?CXDE#$?? VFTR%?"                        // 20-2F
     .text "?NBHGY^???MJU&*?"                        // 30-3F
     .text "?<KIO)(??>?L:P_?"                        // 40-4F
     .text @"??\"?{+????\$0a}?|??"                   // 50-5F
     .text @"??????\$08??1?47???"                    // 60-6F
-    .text @"0.2568\$1b??+3-*9??"                    // 70-7F
+    .text @"0.2568\$1b?\$8b+3-*9??"                 // 70-7F
  
 #endif
 
@@ -229,3 +221,31 @@ Handle a keyboard interrupt. Store scancode in keyboard buffer
 exit_irq_keyboard:
     stx zp.kb_write_ptr                             // update keyboard write pointer
 }
+
+.macro @update_kb_read_ptr() {
+    inx
+    cpx #KB_BUFFER_SIZE
+    bcc store_read_ptr                              // if KB_READ_PTR reached buffer size, reset to 0
+    ldx #0
+store_read_ptr:
+    stx zp.kb_read_ptr  
+}
+
+// Check for and handle a modifier scancode. Flips the modifier's flag and then tries to get a real press
+.macro @handle_modifier(scancode, flag) {
+    cpy #scancode                                   // check for the modifier's scancode
+    bne not_modifier
+    lda zp.kb_flags                                 // check if modifier is being released 
+    bit #RELEASE_NXT
+    bne modifier_released
+    set_bits(zp.kb_flags, flag)                     // if modifier is being pressed, set flag
+    bra modifier_done                               // and jump to done
+modifier_released:
+    clear_bits(zp.kb_flags, flag | RELEASE_NXT | EXTENDED_NXT) // if modifier is being released, clear flags
+modifier_done:
+    update_kb_read_ptr()                               // update read pointer
+    jmp read_from_buffer                            // and try to get a real keypress
+not_modifier:
+}
+
+

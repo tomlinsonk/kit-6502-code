@@ -1,0 +1,406 @@
+.cpu _65c02
+.encoding "ascii"
+
+#importonce
+.filenamespace ssd
+
+/*
+KiT Simple Filesystem (KSF)
+
+64 file slots, one in each of the 64 4Kb sectors of the 256 Kb SSD.
+Each file can be up to 3842 bytes (4Kb minus one 256-byte header page)
+Page $80 is the header page; a file is stored in pages $81-$8F.
+
+Header page spec:
+
+Bytes | Contents
+-----------------------------------------------------------------
+00    | Always $00 to indicate this sector is occupied
+01    | File type ($00 = program, $10  = image)
+02-03 | Load start address (lo, hi)
+04-05 | File size in bytes 
+06-07 | Fletcher checksum of file (lo, hi)
+~ 08  | Next sector (for multi-sector files; $ff if no next sector)
+~ 09  | Video mode (for images, $ff for programs)
+10-1F | Filename (up to 16 ASCII chars, null terminated)
+20    | Always $00
+
+
+File types:
+$00: program
+~ $10: image
+
+~ planned, but unimplemented
+*/
+
+
+
+
+
+
+#if !MACROS_ONLY
+
+#import "zp.lib"
+#import "via.lib"
+#import "vid.lib"
+
+// Addresses
+.label START_ADDR = $8000
+.label SECTOR_REG = via.PORTD
+.label SECTOR_REG_DIR = via.DDD
+
+.label ADDR_5555 = $8555
+.label ADDR_2AAA = $8aaa
+
+.label file_type_addr = $8001
+.label load_addr = $8002
+.label file_size_addr = $8004
+.label next_sector_addr = $8008
+.label vid_mode_addr = $8009
+.label file_name_addr = $8010
+
+.label file_start_addr = $8100
+
+.label PROGRAM = $00
+.label IMAGE = $10
+
+
+
+
+/**
+ * Erase the current sector stored in zp.ssd_sector
+ * Blocks until the erase is complete
+ */
+erase_sector:
+    pha                                                 
+
+    lda #$ff
+    sta SECTOR_REG_DIR                                  // Make sure sector register is set to output
+
+    lda #5                                              // Write the 5-byte sector erase sequence
+    sta SECTOR_REG
+
+    lda #$aa                                            // Byte 1: AA to 5555
+    sta ADDR_5555
+
+    lda #2
+    sta SECTOR_REG
+
+    lda #$55                                            // Byte 2: 55 to 2AAA
+    sta ADDR_2AAA
+
+    lda #5
+    sta SECTOR_REG
+
+    lda #$80                                            // Byte 3: 80 to 5555
+    sta ADDR_5555
+
+    lda #5
+    sta SECTOR_REG
+
+    lda #$aa                                            // Byte 4: AA to 5555
+    sta ADDR_5555
+
+    lda #2
+    sta SECTOR_REG
+
+    lda #$55                                            // Byte 5: AA to 5555
+    sta ADDR_2AAA
+
+    lda zp.ssd_sector
+    sta SECTOR_REG                                      // set the sector to the one we're clearing
+    lda #$30
+    sta START_ADDR                                      // Finally, write 30 to initiate clear
+
+    
+wait_for_clear:
+    bit START_ADDR
+    bpl wait_for_clear                                  // Loop until we read a 1 in data bit 7: clear complete
+
+    pla                                                 
+    rts
+
+
+/**
+ * Write the byte stored in A to the current sector (zp.ssd_sector)
+ * at the address stored in zp.ssd_write_addr
+ */ 
+write_byte:
+    phy
+    write_byte()
+    ply
+    rts
+
+
+/*
+Set SSD sector to value stored in A
+(if A >= 64, does nothing)
+*/
+set_sector: {
+    cmp #64
+    bcs done
+
+    pha
+    lda #$ff
+    sta SECTOR_REG_DIR
+
+    pla
+    sta SECTOR_REG
+    sta zp.ssd_sector
+done:
+    rts
+}
+
+
+/*
+Load the file in the current sector into RAM
+Clears carry bit if successful, set carry bit if unsuccessful
+*/
+load_file: {
+    pha
+    phy
+    phx
+
+load_sector:
+    lda START_ADDR
+    sec
+    bne load_done                                           // if first byte isn't 0, can't load this sector
+
+    mov2 #file_start_addr : zp.ssd_read_addr
+    mov2 load_addr : zp.ssd_write_addr
+    stz zp.ssd_pages_filled
+    ldx #0                                                  // Bytes left low byte in X
+    ldy #0
+
+copy_loop:
+    lda (zp.ssd_read_addr),y
+    sta (zp.ssd_write_addr),y
+
+    inc zp.ssd_read_addr                                    // increment the read address
+    bne no_read_carry                                       // if it doesn't become 0, no need to carry
+    inc zp.ssd_read_addr+1                                  // if it does become 0, carry to high byte
+no_read_carry:
+
+    inc zp.ssd_write_addr                                   // increment the write address
+    bne no_write_carry                                      // if it doesn't become 0, no need to carry
+    inc zp.ssd_write_addr+1                                 // if it does become 0, carry to high byte
+no_write_carry:
+
+    inx                                                     // increase num bytes copied
+    bne check_if_done
+    inc zp.ssd_pages_filled
+    lda zp.ssd_pages_filled
+    cmp #15 
+    bne check_if_done                                          
+
+    lda next_sector_addr                                    // if we've read 15 pages, need to load next sector
+    jsr set_sector
+    jmp load_sector
+
+check_if_done:
+    cpx file_size_addr
+    bne copy_loop                                           // if x doesn't match fsize low byte, we cant be done
+
+    lda zp.ssd_pages_filled                                 // otherwise, check pages filled
+    cmp file_size_addr+1
+    bcc copy_loop                                           // if less than fsize high byte, not done
+                                                            // otherwise, done!
+
+no_next_sector:
+    clc
+load_done:
+    plx
+    ply
+    pla
+    rts
+}
+
+
+
+
+.macro copy_and_inc(addr) {
+    lda addr
+    jsr write_byte
+    inc zp.ssd_write_addr
+}
+
+.macro copy2_and_inc(addr) {
+    lda addr
+    jsr write_byte
+    inc zp.ssd_write_addr
+
+    lda addr+1
+    jsr write_byte
+    inc zp.ssd_write_addr
+}
+
+/**
+ * Write the byte stored in A to the current sector (zp.ssd_sector)
+ * at the address stored in zp.ssd_write_addr
+ */ 
+.macro write_byte() {
+    pha
+    lda #5                                              // Write the 3-byte program sequence
+    sta SECTOR_REG
+
+    lda #$aa                                            // Byte 1: AA to 5555
+    sta ADDR_5555
+
+    lda #2
+    sta SECTOR_REG
+
+    lda #$55                                            // Byte 2: 55 to 2AAA
+    sta ADDR_2AAA
+
+    lda #5
+    sta SECTOR_REG
+
+    lda #$a0                                            // Byte 3: A0 to 5555
+    sta ADDR_5555
+
+    lda zp.ssd_sector
+    sta SECTOR_REG                                      // Set sector the one we're writing to
+
+    pla                                                 // pull write value from stack
+    ldy #0
+    sta (zp.ssd_write_addr),y                           // write to the address in zp.ssd_write_addr
+
+wait_for_data_match:
+    cmp (zp.ssd_write_addr),y                           // check if data was written successfully
+    bne wait_for_data_match                             // loop until write is done
+}
+
+
+ 
+#endif
+
+/**
+ * Set the SSD sector to the given value (0-63)
+ */ 
+.macro @set_ssd_sector(sector) {
+    .assert "Valid sector number", (sector >= 0 && sector < 64), true
+    pha
+    lda #$ff
+    sta SECTOR_REG_DIR
+
+    lda #sector
+    sta SECTOR_REG
+    sta zp.ssd_sector
+    pla            
+}
+
+/*
+Save new file to the SSD to the current sector.
+Clobbers A, Y, zp.K, zp.L
+Address 
+*/
+.macro @ssd_save_file(start_addr, load_addr, fsize, checksum, fname, ftype, vid_mode) {
+save_to_sector:
+    jsr erase_sector
+
+    mov2 #START_ADDR : zp.ssd_write_addr                // initialize ssd_write_addr to $8000
+
+    lda #$00
+    jsr write_byte                                      // Write 00 at start of file
+    inc zp.ssd_write_addr
+    
+    lda ftype
+    jsr write_byte                                      // Write file type
+    inc zp.ssd_write_addr
+    
+    copy2_and_inc(start_addr)                           // Write program start addr
+    copy2_and_inc(fsize)                                // Write file size
+    copy2_and_inc(checksum)                             // Write checksum
+
+    mov2 #vid_mode_addr : zp.ssd_write_addr
+    lda vid_mode
+    jsr write_byte                                      // Write video mode
+    inc zp.ssd_write_addr
+
+    mov2 #file_name_addr : zp.ssd_write_addr
+
+    ldy #0
+fname_loop:                                             // Write filename
+    lda fname,y
+    beq fname_done
+    jsr write_byte
+    inc zp.ssd_write_addr
+    iny
+    jmp fname_loop
+fname_done:
+
+    lda #0
+fill_header:                                                // Fill the rest of the header with 0s
+    jsr write_byte
+    inc zp.ssd_write_addr
+    bne fill_header
+
+    inc zp.ssd_write_addr+1                                 // increment write page to $81
+    ldx #0                                                  // init bytes copied to 0
+    stz zp.ssd_pages_filled                                 // and pages copied to 0
+    mov2 load_addr : zp.ssd_read_addr
+    
+    ldy #0                                                  // store 0 in y for indirect addressing                             
+copy_loop:
+    lda (zp.ssd_read_addr),y                                // read the byte to cop
+    write_byte()                                            // write it to the ssd
+
+    inc zp.ssd_read_addr                                    // increment the read address
+    bne no_read_carry                                       // if it doesn't become 0, no need to carry
+    inc zp.ssd_read_addr+1                                  // if it does become 0, carry to high byte
+no_read_carry:
+
+    inc zp.ssd_write_addr                                   // increment the write address
+    bne no_write_carry                                      // if it doesn't become 0, no need to carry
+    inc zp.ssd_write_addr+1                                 // if it does become 0, carry to high byte
+no_write_carry:
+
+    inx                                                     // increase num bytes copied
+    bne no_x_carry
+    inc zp.ssd_pages_filled
+    lda zp.ssd_pages_filled
+    cmp #15 
+    beq need_next_sector                                    // if we've filled 15 pages, need next sector
+
+no_x_carry:
+    cpx fsize
+    bne copy_loop                                           // if x doesn't match fsize low byte, we cant be done
+
+    lda zp.ssd_pages_filled                                 // otherwise, check pages filled
+    cmp fsize+1
+    bcc copy_loop                                           // if less than fsize high byte, not done
+    jmp copy_done                                           // otherwise, done!
+    
+need_next_sector:                                                        
+    mov2 #next_sector_addr : zp.ssd_write_addr              // sector doesn't have room! Need to save next sector ptr
+    lda zp.ssd_sector                                       
+    inc                                                     // add 1 to sector
+    jsr write_byte                                          // Write next sector (ff = null)
+    jsr set_sector                                          
+
+    lda load_addr+1                                         // add 15 to load_addr high byte (i.e., add 3840)
+    clc
+    adc #15
+    sta load_addr+1   
+
+    lda start_addr+1                                        // add 15 to start_addr high byte (i.e., add 3840)
+    clc
+    adc #15
+    sta start_addr+1   
+
+    lda fsize+1                                             // subtract 15 from remaining file size high byte (i.e., 3840)
+    sec
+    sbc #15
+    sta fsize+1
+
+    jmp save_to_sector                                      // save next sector!
+
+copy_done:
+
+    lda ftype
+    bne save_done
+    vid_write_string("saved")
+save_done:
+}
+
+

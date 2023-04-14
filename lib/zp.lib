@@ -65,3 +65,18 @@ Storage for vid_cg1
 */
 .label cg1_0 = $30
 .label cg1_1 = $31
+
+
+/*
+Block 4
+------------------------------------
+Storage for ssd
+*/
+.label ssd_write_addr = $40							// two bytes
+// $41
+.label ssd_sector = $42								// one byte
+.label ssd_read_addr = $43 							// two bytes
+// $44
+.label ssd_pages_filled = $45 						// one byte
+
+

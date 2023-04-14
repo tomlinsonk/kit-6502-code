@@ -11,9 +11,16 @@
 #import "macros.lib"
 
 // Video addresses
-.label VRAM_START = $7000
-.label VRAM_END = $7fff
-.label VRAM_CG1_END = $73ff
+#if !PCB
+    .label VRAM_START = $7000
+    .label VRAM_END = $7fff
+    .label VRAM_CG1_END = $73ff
+#else 
+    .label VRAM_START = $6000
+    .label VRAM_END = $77ff
+    .label VRAM_CG1_END = $63ff
+#endif
+
 
 .label GREEN = 0
 .label YELLOW = 1
@@ -35,12 +42,11 @@ write_pixel: {
     pha
 
     tya                                                         // load row into A
-    ror
-    ror
-    ror
-    ror                                                         // divide by 16
-    and #%00001111
-    ora #>vid.VRAM_START                                        // add vram start hi byte (%01110000)
+    lsr
+    lsr
+    lsr
+    lsr                                                         // divide by 16
+    ora #>VRAM_START                                            // add vram start hi byte (%01110000)
     sta zp.vid_ptr+1                                            // store in vid pointer hi byte
 
     tya                                                         // load row into A
@@ -60,7 +66,7 @@ write_pixel: {
 
     ldy #0
     lda (zp.vid_ptr),y                                          // load current 4 pixels
-    sta stash                                                   // stash in B
+    sta stash                                                   // stash current 4 pixels
 
     txa                                                         // load col into A
     ror                                                         // shift bottom bit into carry
@@ -111,8 +117,8 @@ bits_00:                                                        // col bits are 
     jmp save_pixel 
     
 save_pixel:
-    and stash                                                    // zero out new pixels
-    ora new_color                                                    // add in new pixels
+    and stash                                                   // zero out new pixels
+    ora new_color                                               // add in new pixels
     sta (zp.vid_ptr),y                                          // save new byte to VRAM (y still 0)                                                        
 
     pla
@@ -135,7 +141,7 @@ read_pixel: {
     ror
     ror                                                         // divide by 16
     and #%00001111
-    ora #>vid.VRAM_START                                        // add vram start hi byte (%01110000)
+    ora #>VRAM_START                                            // add vram start hi byte (%01110000)
     sta zp.vid_ptr+1                                            // store in vid pointer hi byte
 
     tya                                                         // load row into A

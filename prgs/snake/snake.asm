@@ -2,6 +2,8 @@
 .encoding "ascii"
 .filenamespace snake
 
+#define PCB
+
 #import "video_mon.sym"
 
 #define MACROS_ONLY
@@ -33,6 +35,10 @@
 
 .segment Code [outPrg="snake.prg", start=$1000] 
 reset:
+#if PCB
+	set_vid_mode_cg1()
+#endif
+
 	fill_vid_screen_cg1(BG_COLOR)
 
 	stz tail_ptr

@@ -1,6 +1,8 @@
 .cpu _65c02
 .encoding "ascii"
 
+#define PCB
+
 // Library code
 *=$8000 
 #import "lcd.lib"
@@ -11,16 +13,23 @@
 
 
 // Main code
-reset:
-    jsr kb.init
-    stz zp.B
 
+
+reset:
     lda #$ff
     sta via.DDB
+
+    jsr kb.init
+    jsr vid.init
+    // jsr uart.init_38400
+
 
 on_loop:
     jsr kb.get_press
     beq on_loop
+
+    jsr vid.write_ascii
+    inc_vid_ptr()
 
     lda #$ff
     sta via.PORTB
@@ -29,10 +38,25 @@ off_loop:
     jsr kb.get_press
     beq off_loop
 
+        jsr vid.write_ascii
+    inc_vid_ptr()
+
     lda #$00
     sta via.PORTB
 
     jmp on_loop
+
+
+// reset:
+//     // jsr kb.init
+
+//     lda #$ff
+//     sta via.DDB
+
+//     sta via.PORTB
+
+// loop:
+//     jmp loop
 
 
 

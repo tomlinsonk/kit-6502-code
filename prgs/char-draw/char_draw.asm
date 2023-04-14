@@ -351,7 +351,7 @@ command_map:
     .byte $00,$1a,$1d,$00,$1e,$00,$23,$1b,$21,$1f,$20,$00,$00,$00,$00,$00 	// 70-1F
 
 vram_row_starts:
-	.lohifill 16,$7000+i*32
+	.lohifill 16,vid.VRAM_START+i*32
 
 draw_buf_row_starts:
 	.lohifill 16,draw_buffer+i*32

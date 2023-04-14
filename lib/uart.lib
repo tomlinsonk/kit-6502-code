@@ -9,7 +9,15 @@
 #import "zp.lib"
 #import "macros.lib"
 
-// UART addresses
+/*
+UART Addresses
+
+Note: 
+breadboard version uses 782x for UART, but 
+also selects for 7?2x as long as ? >= 8.
+PCB version uses 7Axx for UART.
+Using 7A2X thus works with both
+*/
 .label RBR = $7a20											// receiver buffer register (read only)
 .label THR = $7a20                                          // transmitter holding register (write only)
 .label IER = $7a21                                          // interrupt enable register
@@ -59,8 +67,11 @@
 .label DIV_4800_LO = 13
 .label DIV_4800_HI = 0
 
-.label DIV_57600_LO = 2
-.label DIV_57600_HI = 0
+.label DIV_9600_LO = 12
+.label DIV_9600_HI = 0
+
+.label DIV_38400_LO = 3
+.label DIV_38400_HI = 0
 
 
 // zp.uart_flag bits
@@ -91,15 +102,18 @@ init:
 
     lda #DIV_4800_HI                                       
     sta DLM                                            		// store divisor hi byte
+     
 
-    lda #LCR_8N1
-    sta LCR                                            		// set 8 data bits, 1 stop bit, no parity, disable DLAB
-
+                                      						// set 8 data bits, 1 stop bit, no parity, disable DLAB
     lda #FIFO_ENABLE
     sta FCR                                            		// enable the UART FIFO
 
     lda #POLLED_MODE
     sta IER                                            		// disable all interrupts
+
+
+    lda #LCR_8N1
+    sta LCR     
 
     // stz zp.uart_read_ptr
     // stz zp.uart_write_ptr
@@ -110,22 +124,49 @@ init:
 
 /* --------------------------------------------------------------------------------------- 
 Initialize the UART
-Uses 8n1 mode with no FIFO and 57600 baud @ 1.8...MHz clock
+Uses 8n1 mode with no FIFO and 38400 baud @ 1.8...MHz clock
 */
-init_57600:
+init_38400:
+    pha
+
+    lda #DLAB
+    sta LCR                                                 // set the divisor latch access bit (DLAB)
+
+    lda #DIV_38400_LO
+    sta DLL                                                 // store divisor low byte (4800 baud @ 1 MHz clock)
+
+    lda #DIV_38400_HI                                       
+    sta DLM                                                 // store divisor hi byte
+
+    lda #FIFO_ENABLE
+    sta FCR                                                 // enable the UART FIFO
+
+    lda #POLLED_MODE
+    sta uart.IER                                                 // disable all interrupts
+
+    lda #LCR_8N1
+    sta LCR                                                 // set 8 data bits, 1 stop bit, no parity, disable DLAB                                             // set 8 data bits, 1 stop bit, no parity, disable DLAB
+
+
+    pla
+    rts
+
+/* --------------------------------------------------------------------------------------- 
+Initialize the UART
+Uses 8n1 mode with no FIFO and 4800 baud @ 1MHz clock
+*/
+init_9600:
 	pha
 
 	lda #DLAB
     sta LCR                                            		// set the divisor latch access bit (DLAB)
 
-    lda #DIV_57600_LO
+    lda #DIV_9600_LO
     sta DLL                                            		// store divisor low byte (4800 baud @ 1 MHz clock)
 
-    lda #DIV_57600_LO                                       
+    lda #DIV_9600_HI                                       
     sta DLM                                            		// store divisor hi byte
-
-    lda #LCR_8N1
-    sta LCR                                            		// set 8 data bits, 1 stop bit, no parity, disable DLAB
+                                      		// set 8 data bits, 1 stop bit, no parity, disable DLAB
 
     lda #FIFO_ENABLE
     sta FCR                                            		// enable the UART FIFO
@@ -133,11 +174,15 @@ init_57600:
     lda #POLLED_MODE
     sta IER                                            		// disable all interrupts
 
+
+    lda #LCR_8N1
+    sta LCR      
     // stz zp.uart_read_ptr
     // stz zp.uart_write_ptr
 
     pla
     rts
+
 
 /* --------------------------------------------------------------------------------------- 
 Read a byte from the UART into A. Blocks until a byte is available. 
@@ -215,7 +260,7 @@ Read (n_addr) bytes into (target_addr), ..., (target_addr)+(n_addr)-1.
 Blocking. Clobbers A, zp.B,C,D
 Address n_addr, n_addr+1 should contain the number of bytes to read
 Address target_addr, target_addr+1 should contain the target address
-The fletcher checksum of the received bytes will be stored in checksum_addr,checksum_addr+1 
+The Fletcher checksum of the received bytes will be stored in checksum_addr,checksum_addr+1 
 */
 .macro @uart_read_n_with_checksum(n_addr, target_addr, checksum_addr) {
 	phx
@@ -224,8 +269,8 @@ The fletcher checksum of the received bytes will be stored in checksum_addr,chec
 	stz checksum_addr
 	stz checksum_addr+1 									// initialize checksum
 
-	ldx n_addr 												// store num bytes low byte in X
-	mov n_addr+1 : zp.B 									// store num bytes high byte in zp.B
+	ldx #0 													// store num bytes copied low byte in X
+	stz zp.B 												// store num pages copied in X
 
 	ldy #0 													// store 0 in y for indirect addressing								
 
@@ -246,10 +291,15 @@ loop:
 	bne no_carry 											// if it doesn't become 0, no need to carry
 	inc zp.C+1 												// if it does become 0, carry to high byte
 no_carry:
-	dex 													// decrement num bytes left
-	bne loop 												// if it didn't become 0, loop for next byte
-	dec zp.B 												// otherwise, decrement high byte of num bytes left
-	bpl loop 												// if high byte doesn't become negative, loop
+	inx 													// increment num bytes copied
+	bne no_x_carry
+	inc zp.B 												// if carrying, increment num pages copied
+no_x_carry:
+	cpx n_addr
+	bne loop												// if x doesn't match file size low bytes, still copying
+	lda zp.B
+	cmp n_addr+1
+	bcc loop												// if num pages copied less than filesize high byte, still copying
 
 	ply
 	plx

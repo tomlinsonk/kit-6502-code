@@ -1,6 +1,14 @@
 .cpu _65c02
 .encoding "ascii"
 
+#define PCB
+
+#if PCB
+    .print "Assembling for PCB KiT"
+#else 
+    .print "Assembling for Breadboard KiT"
+#endif
+
 // RAM addresses
 
 .label text_buffer = $0200                          // 31 bytes (0200-021f)
@@ -10,10 +18,16 @@
 
 
 // RAM labels
-.label vram_inline_start = $71e1
+#if !PCB
+    .label vram_inline_start = $71e1
+#else 
+    .label vram_inline_start = $61e1
+#endif
 
+*=$8000   
+.fill 4096, 0
 
-*=$8000                                             // ROM starts at address $8000
+*=$9000                                             // ROM starts at address $8000
 jump_table:
     jmp reset                                       // 8000
     jmp vid.write_ascii                             // 8003
@@ -22,9 +36,14 @@ jump_table:
 #import "kb.lib"
 #import "macros.lib"
 #import "vid.lib"
-#import "lcd.lib"
 #import "uart.lib"
 #import "vid_cg1.lib"
+#import "vid_rg1.lib"
+#import "ssd.lib"
+
+#if !PCB
+    #import "lcd.lib"
+#endif
 
 
 
@@ -38,7 +57,14 @@ reset:
     jsr kb.init
     jsr vid.init
     jsr vid.init_cursor
+
+    set_vid_mode_text()
+    set_ssd_sector(0)
+
+
+#if !PCB
     jsr lcd.init
+#endif
 
     lda #$42
     ldx #$ff
@@ -152,6 +178,31 @@ not_load:
     bne not_exit
     jmp exit_command
 not_exit:
+
+    cmp #'d'
+    bne not_dir
+    jmp dir_command
+not_dir:
+
+    cmp #'e'
+    bne not_erase
+    jmp erase_command
+not_erase:
+
+    cmp #'f'
+    bne not_file
+    jmp file_command
+not_file:
+
+    cmp #'c'
+    bne not_set_sector
+    jmp set_sector_command
+not_set_sector:
+
+    cmp #'h'
+    bne not_help
+    jmp help_command
+not_help:
 
 enter_reset:
     jsr reset_prompt
@@ -364,22 +415,26 @@ Load command
 Loads a file over UART serial port
 */
 load_command:
+
+#if !PCB
     jsr uart.init
-
-//     set_vid_ptr(0, 0)
-
-// uart_loop:
-//     jsr uart.read_byte
-//     jsr vid.write_hex
-//     jmp uart_loop
-
+#else
+    jsr uart.init_38400
+#endif
 
     set_vid_ptr(15, 0)
     vid_write_string("loading")
 
+    jsr uart.read_byte                              // read file type
+    sta zp.I                                        // store file type in zp.I
+    
+    jsr uart.read_byte                              // read video mode (or ff for programs)
+    sta zp.J                                        // store video mode in zp.J
+
     uart_read_2(zp.mon_arg1)                        // read file size into mon_arg1
     uart_read_2(zp.E)                               // read checksum in zp.E,F
     uart_read_2(zp.mon_addr)                        // read start addr into mon_addr
+    uart_read_2(zp.K)                               // read load addr into zp.K,J
 
     set_vid_ptr(14, 0)
 
@@ -404,7 +459,7 @@ load_command:
     lda zp.F
     jsr vid.write_hex    
 
-    uart_read_n_with_checksum(zp.mon_arg1, zp.mon_addr, zp.G)     // read n bytes and save checksum at zp.G,H
+    uart_read_n_with_checksum(zp.mon_arg1, zp.K, zp.G)     // read n bytes and save checksum at zp.G,H
 
     vid_write_string("=")                           
     lda zp.G
@@ -415,20 +470,249 @@ load_command:
     jsr vid.write_hex
 
     set_vid_ptr(15, 0)
-    vid_write_string("done! run? (y/n)")
+    vid_write_string("done! Run, Save, or Cancel?")
 
 get_yn_loop:
     jsr kb.get_press
     beq get_yn_loop
 
-    cmp #'y'
+    cmp #'r'
     bne dont_run
     jmp go
 dont_run:
 
+    cmp #'s'
+    bne dont_save
+    jsr save_to_ssd
+dont_save:
+
+
     jmp enter_reset
 
 
+/*
+Save the file loaded over UART to SSD
+*/ 
+save_to_ssd:
+    jsr set_sector_prompt
+
+    jsr vid.shift_up_1_clear_bottom
+    vid_write_string("filename: ")
+
+    jsr clear_text_buffer
+    ldy #0
+
+fname_loop:
+    jsr kb.get_press
+    beq fname_loop
+
+    cmp #kb.ASCII_NEWLINE
+    beq fname_done
+
+    sta text_buffer,y
+    jsr vid.write_ascii
+    inc_vid_ptr()
+    iny
+    cpy #16
+    bcc fname_loop
+fname_done:
+
+    jsr vid.shift_up_1_clear_bottom
+    ssd_save_file(zp.mon_addr, zp.K, zp.mon_arg1, zp.G, text_buffer, zp.I, zp.J)
+
+    jsr vid.shift_up_1
+
+    jmp enter_reset
+
+wait_loop:
+    jsr kb.get_press
+    beq wait_loop
+
+    rts
+
+set_sector_prompt:
+    jsr vid.shift_up_1_clear_bottom
+    vid_write_string("sector (hex 00-39): ")
+    
+get_sector_nibble1_loop:
+    jsr kb.get_press
+    beq get_sector_nibble1_loop
+
+    sta text_buffer
+    jsr vid.write_ascii
+
+    inc_vid_ptr()
+
+get_sector_nibble2_loop:
+    jsr kb.get_press
+    beq get_sector_nibble2_loop
+
+    sta text_buffer+1
+    jsr vid.write_ascii
+    inc_vid_ptr()
+
+    ldy #0
+    jsr parse_hex_byte
+    jsr ssd.set_sector
+
+    rts
+
+
+/*
+File command
+Loads the contents of file given as hex argument
+*/
+file_command: 
+    consume_spaces(file_done)
+    jsr parse_hex_byte
+
+    jsr ssd.set_sector
+
+    lda ssd.file_type_addr
+    cmp #ssd.IMAGE
+    bne not_image
+    lda ssd.vid_mode_addr
+    sta vid.MODE_REG    
+not_image:
+
+    jsr ssd.load_file
+
+    lda ssd.file_type_addr
+    beq run_program                                 // if file is program, run it!
+
+    cmp #ssd.IMAGE
+    beq wait_for_esc
+
+    jmp file_done                                   // otherwise, do nothing
+
+run_program:
+    jmp (ssd.load_addr)
+                            
+
+wait_for_esc:
+    jsr kb.get_press
+    beq wait_for_esc                                
+
+    cmp #kb.ASCII_ESC
+    bne wait_for_esc   
+
+    set_vid_mode_text()                             
+    jmp file_done
+
+file_done:
+    jmp enter_reset
+
+
+
+
+
+/*
+Dir command
+Lists all files stored on the SSD
+*/
+dir_command:
+    consume_spaces(dir_zero)
+    jsr parse_hex_byte
+    tax
+    jmp display_dir
+dir_zero:
+    ldx #0
+display_dir:
+
+    fill_vid_screen(' ')
+    set_vid_ptr(0, 0)
+
+    mov2 #ssd.file_name_addr : zp.B
+
+    ldy #0
+sector_loop:
+    jsr vid.set_row
+    txa
+    jsr ssd.set_sector
+    jsr vid.write_hex
+    inc_vid_ptr()
+
+    lda ssd.START_ADDR
+    bne empty_sector
+
+    lda ssd.file_type_addr
+
+    cmp #ssd.IMAGE
+    bne write_p
+    lda #'I' 
+    jsr vid.write_ascii
+    jmp write_fname
+
+write_p:
+    lda #'P' 
+    jsr vid.write_ascii
+
+write_fname:
+    inc_vid_ptr()
+    inc_vid_ptr()
+    jsr vid.write_string
+    jmp next_sector 
+
+empty_sector:
+    lda #'E' 
+    jsr vid.write_ascii
+next_sector:
+    inx
+    cpx #64
+    bcs dir_done
+    iny
+    cpy #15
+    bne sector_loop
+
+dir_done:
+    jmp enter_reset
+
+
+set_sector_command:
+    consume_spaces(file_done)
+    jsr parse_hex_byte
+    jsr ssd.set_sector
+
+    vid_write_string("loaded sector ")
+
+    lda zp.ssd_sector
+    jsr vid.write_hex
+
+
+    jmp enter_reset
+
+
+
+/*
+Erase command
+Erases current sector of SSD
+*/
+erase_command:
+    consume_spaces(file_done)
+    jsr parse_hex_byte
+    jsr ssd.set_sector
+
+    vid_write_string("confirm erase Y/N ")
+
+erase_confirm:
+    jsr kb.get_press
+    beq erase_confirm
+    cmp #'y'
+    beq do_erase
+    jmp enter_reset
+
+do_erase:
+    jsr ssd.erase_sector
+
+    fill_vid_row(15, ' ')
+    set_vid_ptr(15, 0)
+
+    vid_write_string("erased ")
+    lda zp.ssd_sector
+    jsr vid.write_hex
+    jsr vid.shift_up_1
+
+    jmp enter_reset
 
 /*
 Exit command
@@ -444,7 +728,33 @@ exit_command:
     rti                                             // pop P and PC off of stack and return to PC 
 
 
+/*
+Help command
+Prints help message
+*/
+help_command:
+    fill_vid_screen(' ')
+    .var helps = List().add(
+        "Read (addr)",
+        "Write (addr) (data)",
+        "Go to (addr)",
+        "Status of registers",
+        "Update (pc p a x y s)",
+        "Load over uart",
+        "Change (sector)",
+        "Directory (sector)",
+        "Erase (sector)",
+        "File run (sector)",
+        "Help",
+        "eXit monitor"
+    )
 
+    .for(var i=0; i<helps.size(); i++) {
+        set_vid_ptr(i, 0)
+        vid_write_string(helps.get(i))
+    }
+    
+    jmp enter_reset
 
 /* 
 Parse text into zp.mon_arg1 and zp.mon_addr starting at txt_ptr,y
@@ -509,7 +819,7 @@ backspace_pressed:
 
 
 /*
-Handle the extended keypresses (arrow keys)
+Handle the extended and pseudoextended keypresses (arrow keys and function keys)
 */
 extended_pressed:
     ldy #0
@@ -531,7 +841,78 @@ not_left:
     force_cursor_update()
     jmp mon_loop    
 not_right:
-    
+
+    cmp #kb.K_F1
+    bne not_f1
+    set_vid_mode_text()
+    jmp mon_loop                          
+not_f1:
+
+    cmp #kb.K_F2
+    bne not_f2
+    set_vid_mode_sg6()
+    jmp mon_loop                        
+not_f2:
+
+    cmp #kb.K_F3
+    bne not_f3
+    set_vid_mode_cg1()
+    jmp mon_loop                          
+not_f3:
+
+    cmp #kb.K_F4
+    bne not_f4
+    set_vid_mode_rg1()
+    jmp mon_loop                         
+not_f4:
+
+    cmp #kb.K_F5
+    bne not_f5
+    set_vid_mode_cg2()
+    jmp mon_loop                              
+not_f5:
+
+    cmp #kb.K_F6
+    bne not_f6
+    set_vid_mode_rg2()
+    jmp mon_loop                             
+not_f6:
+
+    cmp #kb.K_F7
+    bne not_f7
+    set_vid_mode_cg3()
+    jmp mon_loop                              
+not_f7:
+
+    cmp #kb.K_F8
+    bne not_f8
+    set_vid_mode_rg3()
+    jmp mon_loop                             
+not_f8:
+
+    cmp #kb.K_F9
+    bne not_f9
+    set_vid_mode_cg6()
+    jmp mon_loop                           
+not_f9:
+
+    cmp #kb.K_F10
+    bne not_f10
+    set_vid_mode_rg6()
+    jmp mon_loop                              
+not_f10:
+
+    cmp #kb.K_F11
+    bne not_f11   
+    jmp mon_loop                                                     
+not_f11:
+
+    cmp #kb.K_F12
+    bne not_f12
+    jmp mon_loop                              
+not_f12:
+
+not_function_key:    
     jmp mon_loop
 
 
@@ -558,7 +939,7 @@ clear_text_loop:                                        // write 0s to the text 
 parse the hex byte (lowercase) ascii number starting at TEXT_BUFFER,y and store the result in A. Also increments y
 */
 parse_hex_byte:                                         
-    lda text_buffer,y                                    // load the first symbol
+    lda text_buffer,y                                   // load the first symbol
     jsr parse_hex_char                                  // parse it
 
     asl

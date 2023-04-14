@@ -2,6 +2,8 @@
 .encoding "ascii"
 .filenamespace mandelbrot
 
+#define PCB
+
 #import "video_mon.sym"
 
 #define MACROS_ONLY
@@ -25,6 +27,11 @@
 
 .segment Code [outPrg="mandelbrot.prg", start=$4000] 
 reset:
+
+    lda #$ff
+    sta vid.MODE_REG_DIR
+
+    set_vid_mode_cg1()
     
     fill_vid_screen_cg1(vid_cg1.GREEN)
 

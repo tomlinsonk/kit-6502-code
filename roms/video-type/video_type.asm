@@ -1,6 +1,8 @@
 .cpu _65c02
 .encoding "ascii"
 
+
+#define PCB
 // RAM addresses
 
 .label txt_buffer = $0300                            // 512 bytes (0200-03ff)
@@ -21,7 +23,7 @@ reset:
     jsr kb.init
     jsr vid.init
     jsr vid.init_cursor
-    jsr lcd.init
+    // jsr lcd.init
 
     jsr clear_txt_buffer     
 
@@ -192,7 +194,7 @@ irq:
 
     ror 
     bcc no_ca1_irq
-    kb_handle_irq()   
+    handle_kb_irq()   
 no_ca1_irq:
 
     ror
