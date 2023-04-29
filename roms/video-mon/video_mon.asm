@@ -40,6 +40,7 @@ jump_table:
 #import "vid_cg1.lib"
 #import "vid_rg1.lib"
 #import "ssd.lib"
+#import "sid.lib"
 
 #if !PCB
     #import "lcd.lib"

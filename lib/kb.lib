@@ -35,6 +35,8 @@
 .label K_ENTER = $5a
 .label K_L_SHIFT = $12
 .label K_R_SHIFT = $59
+.label K_W = $1d
+.label K_S = $1b
 
 .label K_EXTENDED = $e0
 

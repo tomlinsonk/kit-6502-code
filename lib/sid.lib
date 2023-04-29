@@ -1,0 +1,46 @@
+#importonce
+.filenamespace sid
+
+.cpu _65c02
+.encoding "ascii"
+
+#if !MACROS_ONLY
+
+#import "via.lib"
+#import "zp.lib"
+#import "macros.lib"
+
+.label voice1_freq = $7e00 // two bytes
+.label voice1_pw = $7e02 // two bytes (low 12 bits only)
+.label voice1_control = $7e04
+.label voice1_atk_dec = $7e05
+.label voice1_sus_rel = $7e06
+
+.label voice2_freq = $7e07 // two bytes
+.label voice2_pw = $7e09 // two bytes (low 12 bits only)
+.label voice2_control = $7e0b
+.label voice2_atk_dec = $7e0c
+.label voice2_sus_rel = $7e0d
+
+
+.label voice3_freq = $7e0e // two bytes
+.label voice3_pw = $7e10 // two bytes (low 12 bits only)
+.label voice3_control = $7e12
+.label voice3_atk_dec = $7e13
+.label voice3_sus_rel = $7e14
+
+.label filter_cutoff = $7e15 // two bytes (low 11 bits only)
+.label res_filter = $7e17
+.label mode_vol = $7e18
+
+.label rand = $7e1b
+
+#endif
+
+.macro @init_sid_osc3_random() {
+    mov2 #$ffff : voice3_freq
+    mov #$ff : voice3_atk_dec
+    mov #$ff : voice3_sus_rel
+    mov #$80 : voice3_control
+
+}

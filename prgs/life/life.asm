@@ -36,6 +36,8 @@ reset:
 	// jsr rand_fill
 	jsr clear_screen
 
+
+	// gosper glider gun 
 	lda #%11000000
 	sta vram + 132
 	sta vram + 132 - 16
@@ -142,23 +144,7 @@ chunk_carry:
 	lda #>vram
 	sta x_loop+2										// reset the vram address
 
-
-
-// stop:
-// 	jmp stop
-
-// wait_for_press:
-// 	jsr kb.get_press
-// 	beq wait_for_press
-
-
 	jsr draw_step
-
-
-	// lda #'L'
-	// jsr lcd.write_ascii
-
-
 
 	jmp main_loop
 
@@ -320,79 +306,6 @@ no_carry_3:
 }
 
 
-// .macro update_live_neighbors() {
-// 	pha
-// 	ldy #129
-// 	lda #$ff
-// 	sta (neighbor_ptr),y
-// 	pla 
-// }
-
-
-// draw_step: {
-// 	lda #<live_neighbors
-// 	sta neighbor_ptr
-
-// 	lda #>live_neighbors
-// 	sta neighbor_ptr+1
-
-// 	ldx #0
-// 	ldy #0
-
-// loop:
-// 	phy
-// 	lda #0
-// 	.for (var i = 0; i < 8; i++) {
-// 		ldy (neighbor_ptr),x
-// 		cpy #3
-// 		beq not_dead_to_live
-// 		sec
-// 		rol
-// 		jmp next
-// not_dead_to_live:
-// 		cpy #%10000011
-// 		beq alive
-// 		cpy #%10000010
-// 		beq alive
-// 		clc
-// 		rol
-// 		jmp next
-// alive:
-// 		sec
-// 		rol
-// next:
-// 		inx
-// 	}
-
-// 	ply
-// vram_addr:
-// 	sta vram,y
-
-// 	iny
-// 	bne no_y_carry
-// 	inc vram_addr+2
-// no_y_carry:
-	
-// 	cpx #0
-// 	beq x_carry
-// 	jmp loop
-// x_carry:
-
-
-// 	inc neighbor_ptr+1
-// 	lda neighbor_ptr+1
-// 	cmp #((>live_neighbors) + 32)
-
-// 	beq done
-// 	jmp loop
-// done:
-
-// 	lda #>vram
-// 	sta vram_addr+2
-
-// 	rts
-// }
-
 
 draw_step: {
 	lda #<live_neighbors
@@ -428,17 +341,6 @@ alive:
 next:
 		iny
 
-	
-	// 	beq dead
-	// 	sec
-	// 	rol new_byte
-	// 	jmp next
-	// dead:
-	// 	clc
-	// 	rol new_byte
-
-	// next:
-	// 	iny
 	}
 
 	lda new_byte

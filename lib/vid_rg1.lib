@@ -32,29 +32,7 @@ set_pixel: {
     phy
     pha
 
-    tya                                                         // put row in A
-    lsr
-    lsr
-    lsr
-    lsr                                                         // divide by 16 
-    ora #>VRAM_START                                            // add to VRAM_START to get high byte
-    sta zp.vid_ptr+1                                                                               
-
-    tya                                                         // load row into A
-    and #%00001111                                              // take mod 16
-    asl
-    asl
-    asl
-    asl                                                         // shift into high nibble
-    sta zp.vid_ptr                                              // stash high nibble
-
-    txa                                                         // load col into A
-    lsr
-    lsr                                                         
-    lsr                                                         // divide by 8
-    and #%00001111                                              // zero out high nibble
-    ora zp.vid_ptr                                              // combine with high nibble
-    sta zp.vid_ptr                                              // store in vid pointer low byte
+    set_vid_ptr_from_x_y()
 
     txa 
     and #%00000111                                              // take col mod 8
@@ -71,7 +49,7 @@ set_pixel: {
 }
 
 bit_table:
-    .byte %00000001, %00000010, %00000100, %00001000, %00010000, %00100000, %01000000, %10000000
+    .byte %10000000, %01000000, %00100000, %00010000, %00001000, %00000100, %00000010, %00000001 
 
 /* --------------------------------------------------------------------------------------- 
 Resolution Graphics One.
@@ -82,6 +60,71 @@ clear_pixel: {
     phy
     pha
 
+    set_vid_ptr_from_x_y()
+
+    txa 
+    and #%00000111                                              // take col mod 8
+    tax
+    lda inv_bit_table,x                                         // load mask for bit to clear into A
+    ldy #0
+    and (zp.vid_ptr),y                                          // combine with current 8 pixels
+    sta (zp.vid_ptr),y
+
+    pla
+    ply
+    plx
+    rts
+}
+
+inv_bit_table:
+    .byte %01111111, %10111111, %11011111, %11101111, %11110111, %11111011, %11111101, %11111110
+
+
+/* --------------------------------------------------------------------------------------- 
+Read the pixel at the coordinates in X and Y (X: column 0 - 127, Y: row 0 - 63)
+into A register ($00 or something non-zero)
+*/
+read_pixel: {
+    phy
+    phx
+
+    set_vid_ptr_from_x_y()
+
+    txa 
+    and #%00000111                                              // take col mod 8
+    tax
+    lda bit_table,x                                             // load mask for bit to check into A
+
+    ldy #0
+    and (zp.vid_ptr),y
+
+    plx
+    ply
+    ora #$00                                                    // load Z flag according to A
+    rts
+}
+
+/* --------------------------------------------------------------------------------------- 
+Clear the screen
+*/
+clear_screen: {
+    phx
+
+    ldx #0
+
+    .for(var i=0; i<4; i++) {
+loop:   stz VRAM_START + i * 256,x
+        inx
+        bne loop
+    }
+    
+    plx
+    rts
+}
+
+
+
+.macro set_vid_ptr_from_x_y() {
     tya                                                         // put row in A
     lsr
     lsr
@@ -105,24 +148,6 @@ clear_pixel: {
     and #%00001111                                              // zero out high nibble
     ora zp.vid_ptr                                              // combine with high nibble
     sta zp.vid_ptr                                              // store in vid pointer low byte
-
-    txa 
-    and #%00000111                                              // take col mod 8
-    tax
-    lda inv_bit_table,x                                         // load mask for bit to clear into A
-    ldy #0
-    and (zp.vid_ptr),y                                          // combine with current 8 pixels
-    sta (zp.vid_ptr),y
-
-    pla
-    ply
-    plx
-    rts
 }
-
-inv_bit_table:
-    .byte %11111110, %11111101, %11111011, %11110111, %11101111, %11011111, %10111111, %01111111
-
-
 
 #endif

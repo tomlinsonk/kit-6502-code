@@ -12,6 +12,7 @@
 #import "../../lib/vid_cg1.lib"
 #import "../../lib/kb.lib"
 #import "../../lib/uart.lib"
+#import "../../lib/sid.lib"
 
 .enum {UP, DOWN, LEFT, RIGHT}
 
@@ -37,7 +38,21 @@
 reset:
 #if PCB
 	set_vid_mode_cg1()
+
+	lda #$1F
+	sta sid.mode_vol
+
+	mov #$34 : sid.voice1_atk_dec
+	mov #$88 : sid.voice1_sus_rel
+	init_sid_osc3_random()
 #endif
+
+get_rand_seed:
+	lda sid.rand
+	beq get_rand_seed
+	sta rng
+
+	stz curr_sound
 
 	fill_vid_screen_cg1(BG_COLOR)
 
@@ -117,6 +132,8 @@ no_press:
 	beq loop
 	sta prev_tick
 
+	mov #0 : sid.voice1_control
+
 	lda next_dir
 	sta curr_dir
 
@@ -183,6 +200,7 @@ update_snake:
 	lda snake_y,x												// load head y position into A
 	cmp #64 													// check if we're out of Y bounds
 	bcc in_y_bounds 											// if Y < 64, we're in bounds 
+	jsr play_death_sound	
 	jmp reset 													// otherwise, dead! reset.
 in_y_bounds:
 	tay
@@ -193,6 +211,7 @@ is_food_y:
 	lda snake_x,x
 	cmp #64 													// check if we're out of X bounds
 	bcc in_x_bounds 											// if Y < 64, we're in bounds 
+	jsr play_death_sound	
 	jmp reset 													// otherwise, dead! reset.
 in_x_bounds:
 	tax
@@ -204,6 +223,7 @@ is_food_x:
 	jsr vid_cg1.read_pixel 										// read the pixel value at new head location
 	cmp #SNAKE_COLOR 											// check if it's the snake color
 	bne no_collision	 										// if not, we didn't collide.
+	jsr play_death_sound
 	jmp reset 													// otherwise, dead! reset.
 no_collision:
 
@@ -212,6 +232,7 @@ no_collision:
 
 	lda not_eq
 	bne not_food
+	jsr play_food_sound
 	jsr new_food
 	jmp after_tail_update
 not_food:
@@ -235,7 +256,7 @@ after_tail_update:
  * Generate new food at random position and draw it
  */
  new_food: {
- 	jsr galois16o 												// get random number in rng
+	jsr galois16o
 
 	lda rng
 	and #%00111111 												// take mod 64 for row
@@ -294,10 +315,52 @@ galois16o:
 	rts
 
 
+play_food_sound:
+	phx
+	pha
+	
+	ldx curr_sound
+	mov note_table.lo,x : sid.voice1_freq
+	mov note_table.hi,x : sid.voice1_freq+1
+
+	inx
+	cpx #12
+	bne no_wrap
+	ldx #0
+no_wrap:
+	stx curr_sound
+
+	mov #$11 : sid.voice1_control
+
+	pla
+	plx
+	rts
+
+
+play_death_sound:
+	mov2 #8000 : sid.voice1_freq
+
+	mov #$81 : sid.voice1_control
+
+wait:
+	jsr kb.get_press
+	beq wait
+
+	mov #$00 : sid.voice1_control
+
+	rts
+
+
+note_table: 
+	.lohifill 12, 440 * pow(2, (i+48)/12 - 4.75) / (1843200 / 16777216)
+
+
 
 *=$2000 "Variables" virtual
 snake_x:
 	.fill 256, 0
 snake_y:
 	.fill 256, 0
+curr_sound:
+	.byte $00
 

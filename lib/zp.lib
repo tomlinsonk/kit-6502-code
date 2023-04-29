@@ -80,3 +80,27 @@ Storage for ssd
 .label ssd_pages_filled = $45 						// one byte
 
 
+
+/*
+Blocks 5, 6
+------------------------------------
+Storage for SID
+*/
+.label track1_notes_addr = $50 						// two bytes
+// $51
+.label track2_notes_addr = $52 						// two bytes
+// $53
+.label track3_notes_addr = $54 						// two bytes
+// $55
+.label track1_lengths_addr = $56 					// two bytes
+// $57
+.label track2_lengths_addr = $58 					// two bytes
+// $59
+.label track3_lengths_addr = $5a 					// two bytes
+// $5b
+.label track1_insts_addr = $5c 						// two bytes
+// $5d
+.label track2_insts_addr = $5e 						// two bytes
+// $5f
+.label track3_insts_addr = $60 						// two bytes
+// $61

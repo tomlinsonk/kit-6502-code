@@ -15,15 +15,27 @@
 
 *=$1000                                             // ROM starts at address $8000
 start:
-	lda #$ff 
-	sta $7903
 
 	// lda #%00000001
 	// sta $7901
 
-	set_vid_mode_cg1()
+	set_vid_mode_text()
 
-	brk
+	jsr vid.blank_screen
+
+	set_vid_ptr(0, 0)
+
+	lda #0
+loop:	
+	jsr vid.write_ascii
+	inc_vid_ptr()
+	inc
+	cmp #254
+	bcc loop
+
+done:
+	jmp done
+
 	
 
 	
