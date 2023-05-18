@@ -138,15 +138,22 @@ display_high_scores: {
 	mov2 #snake.high_score_file : zp.read_ptr
 	set_vid_ptr(2, 3)
 
+	ldx #0											// count number of entries in x
+	ldy #1 											// y = 1 means haven't inserted new score yet
 
 print_score_loop:
 	lda (zp.read_ptr)
-	bne print_next_entry 							// if header byte of entry is $00, done
+	bne check_num_printed 							// if header byte of entry is $00, done
+	jmp done
+
+check_num_printed:
+	cpx #10											// Check if we've displayed 10 scores already
+	bcc print_next_entry 		
 	jmp done
 
 print_next_entry:
 	inc2 zp.read_ptr
-
+	inx
 
 read_score:
 	mov (zp.read_ptr) : snake.dividend
@@ -154,6 +161,73 @@ read_score:
 	mov (zp.read_ptr) : snake.dividend+1
 	inc2 zp.read_ptr
 
+	cpy #1
+	bcc new_not_larger 								// if we've already made row for new score, skip checking for larger
+
+	lda snake.dividend+1 
+	cmp snake.score+1
+	bcc new_larger
+	lda snake.dividend 
+	cmp snake.score
+	bcs new_not_larger 								// check if the new score is larger then the one about to be printed
+
+new_larger:
+	dey 											// decrement y to 0 to remember that we've made new score row 		
+	mov2 zp.vid_ptr : new_score_row 				// store which row the new score is in
+	add2 zp.read_ptr : #-3								// reset read_ptr to read beaten score again
+	mov2 snake.score : snake.dividend 				// set up to print new score
+	jsr print_score
+	jmp next_line 									// print the score, but not the name
+
+new_not_larger:	
+	jsr print_score
+
+read_name:
+	lda (zp.read_ptr)
+	beq name_done
+	jsr vid.write_ascii
+	inc_vid_ptr()
+	inc2 zp.read_ptr
+	jmp read_name
+
+name_done:
+	inc2 zp.read_ptr								// set read_ptr to header byte of next entry 
+
+next_line:
+	lda zp.vid_ptr 									// set vid_ptr to column 0
+	and #%11100000
+	sta zp.vid_ptr									
+	add2 zp.vid_ptr : #35 							// go to next row, column 3
+
+	jmp print_score_loop
+
+done: 
+
+	cpy #0
+	beq new_high_score
+	cpx #10
+	beq play_again
+
+	mov2 zp.vid_ptr : new_score_row 				// store which row the new score is in
+	mov2 snake.score : snake.dividend 				// set up to print new score
+	jsr print_score
+
+new_high_score:
+	set_vid_ptr(14, 3)
+	vid_write_string("new high score! type name")
+
+
+play_again:
+	set_vid_ptr(15, 3)
+	vid_write_string("press enter to play again")
+
+	ply
+	plx
+	pla
+	rts
+}
+
+print_score: {
 divide_loop:
 	mov2 #10 : snake.divisor
 	jsr snake.divide
@@ -174,34 +248,8 @@ divide_loop:
 	adc #5
 	sta zp.vid_ptr
 
-read_name:
-	lda (zp.read_ptr)
-	beq name_done
-	jsr vid.write_ascii
-	inc_vid_ptr()
-	inc2 zp.read_ptr
-	jmp read_name
-
-name_done:
-	lda zp.vid_ptr 									// set vid_ptr to column 0
-	and #%11100000
-	sta zp.vid_ptr									
-	add2 zp.vid_ptr : #35 							// go to next row, column 3
-
-	inc2 zp.read_ptr								// set read_ptr to header byte of next entry 
-	jmp print_score_loop
-
-done: 
-
-	set_vid_ptr(15, 3)
-	vid_write_string("press enter to play again")
-
-	ply
-	plx
-	pla
 	rts
 }
-
 
 
 
@@ -227,4 +275,6 @@ ftype:
 vid_mode:
 	.byte $00
 
+new_score_row:
+	.word $0000
 
