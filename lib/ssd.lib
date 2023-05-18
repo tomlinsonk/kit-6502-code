@@ -17,18 +17,19 @@ Bytes | Contents
 -----------------------------------------------------------------
 00    | Always $00 to indicate this sector is occupied
 01    | File type ($00 = program, $10  = image)
-02-03 | Load start address (lo, hi)
+02-03 | Start address (lo, hi)
 04-05 | File size in bytes 
 06-07 | Fletcher checksum of file (lo, hi)
-~ 08  | Next sector (for multi-sector files; $ff if no next sector)
-~ 09  | Video mode (for images, $ff for programs)
+08.   | Next sector (for multi-sector files; $ff if no next sector)
+09.   | Video mode (for images, $ff for programs)
 10-1F | Filename (up to 16 ASCII chars, null terminated)
 20    | Always $00
 
 
 File types:
 $00: program
-~ $10: image
+$10: image
+$20: data
 
 ~ planned, but unimplemented
 */
@@ -63,6 +64,7 @@ $00: program
 
 .label PROGRAM = $00
 .label IMAGE = $10
+.label DATA = $20
 
 
 
@@ -127,7 +129,7 @@ wait_for_clear:
  */ 
 write_byte:
     phy
-    write_byte()
+    ssd_write_byte()
     ply
     rts
 
@@ -224,21 +226,17 @@ load_done:
     inc zp.ssd_write_addr
 }
 
-.macro copy2_and_inc(addr) {
-    lda addr
-    jsr write_byte
-    inc zp.ssd_write_addr
 
-    lda addr+1
-    jsr write_byte
-    inc zp.ssd_write_addr
-}
+
+ 
+#endif
+
 
 /**
  * Write the byte stored in A to the current sector (zp.ssd_sector)
  * at the address stored in zp.ssd_write_addr
  */ 
-.macro write_byte() {
+.macro @ssd_write_byte() {
     pha
     lda #5                                              // Write the 3-byte program sequence
     sta SECTOR_REG
@@ -271,8 +269,6 @@ wait_for_data_match:
 }
 
 
- 
-#endif
 
 /**
  * Set the SSD sector to the given value (0-63)
@@ -289,9 +285,20 @@ wait_for_data_match:
     pla            
 }
 
+.macro ssd_copy2_and_inc(addr) {
+    lda addr
+    jsr write_byte
+    inc zp.ssd_write_addr
+
+    lda addr+1
+    jsr write_byte
+    inc zp.ssd_write_addr
+}
+
+
 /*
 Save new file to the SSD to the current sector.
-Clobbers A, Y, zp.K, zp.L
+Clobbers A, Y
 Address 
 */
 .macro @ssd_save_file(start_addr, load_addr, fsize, checksum, fname, ftype, vid_mode) {
@@ -308,9 +315,9 @@ save_to_sector:
     jsr write_byte                                      // Write file type
     inc zp.ssd_write_addr
     
-    copy2_and_inc(start_addr)                           // Write program start addr
-    copy2_and_inc(fsize)                                // Write file size
-    copy2_and_inc(checksum)                             // Write checksum
+    ssd_copy2_and_inc(start_addr)                           // Write program start addr
+    ssd_copy2_and_inc(fsize)                                // Write file size
+    ssd_copy2_and_inc(checksum)                             // Write checksum
 
     mov2 #vid_mode_addr : zp.ssd_write_addr
     lda vid_mode
@@ -343,7 +350,7 @@ fill_header:                                                // Fill the rest of 
     ldy #0                                                  // store 0 in y for indirect addressing                             
 copy_loop:
     lda (zp.ssd_read_addr),y                                // read the byte to cop
-    write_byte()                                            // write it to the ssd
+    ssd_write_byte()                                            // write it to the ssd
 
     inc zp.ssd_read_addr                                    // increment the read address
     bne no_read_carry                                       // if it doesn't become 0, no need to carry

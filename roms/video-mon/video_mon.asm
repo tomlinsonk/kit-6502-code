@@ -39,6 +39,7 @@ jump_table:
 #import "uart.lib"
 #import "vid_cg1.lib"
 #import "vid_rg1.lib"
+#import "vid_cg3.lib"
 #import "ssd.lib"
 #import "sid.lib"
 
@@ -61,6 +62,15 @@ reset:
 
     set_vid_mode_text()
     set_ssd_sector(0)
+
+
+    set_vid_ptr(7, 14)
+    vid_write_string("KiT")
+    set_vid_ptr(8, 9)
+    vid_write_string("65c02 * 1.8mhz")
+    set_vid_ptr(9, 7)
+    vid_write_string("24k ram * 256k ssd")
+
 
 
 #if !PCB

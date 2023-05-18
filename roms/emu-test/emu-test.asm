@@ -18,13 +18,24 @@
 reset:
     jsr kb.init
 
+    jsr vid.init_cursor
+
+
     jsr vid.blank_screen
     set_vid_ptr(0, 0)
 
 
 loop:
     jsr kb.get_press
-    beq loop
+    bne has_press
+
+
+    blink_cursor #vid.CURSOR_ON : #' '
+
+    jmp loop
+
+has_press:
+
 
     jsr vid.write_ascii
     inc_vid_ptr()

@@ -1,5 +1,5 @@
 #importonce
-.filenamespace vid_cg1
+.filenamespace vid_cg3
 
 .cpu _65c02
 .encoding "ascii"
@@ -14,11 +14,11 @@
 #if !PCB
     .label VRAM_START = $7000
     .label VRAM_END = $7fff
-    .label VRAM_CG1_END = $73ff
+    .label VRAM_CG1_END = $7bff
 #else 
     .label VRAM_START = $6000
     .label VRAM_END = $77ff
-    .label VRAM_CG1_END = $63ff
+    .label VRAM_CG1_END = $6bff
 #endif
 
 
@@ -32,9 +32,9 @@
 
 
 /* --------------------------------------------------------------------------------------- 
-Color Graphics One.
+Color Graphics Three.
 Draw the color in A (bottom two bits: 00 = green, 01 = yellow, 10 = blue, 11 = red) to the coordinates
-in X and Y (X: column 0 - 63, Y: row 0 - 63)
+in X and Y (X: column 0 - 127, Y: row 0 - 95)
 */
 write_pixel: {
     phx
@@ -44,24 +44,24 @@ write_pixel: {
     tya                                                         // load row into A
     lsr
     lsr
-    lsr
-    lsr                                                         // divide by 16
-    ora #>VRAM_START                                            // add vram start hi byte (%01110000)
+    lsr                                                         // divide by 8
+    ora #>VRAM_START                                            // add vram start hi byte
     sta zp.vid_ptr+1                                            // store in vid pointer hi byte
 
     tya                                                         // load row into A
-    and #%00001111                                              // take mod 16
+    and #%00000111                                              // take mod 8
     asl
     asl
     asl
-    asl                                                         // shift into high nibble
-    sta stash                                                   // stash high nibble
+    asl
+    asl                                                         // multiply by 32
+    sta stash                                                   // stash high 3 bits
 
     txa                                                         // load col into A
     ror
     ror                                                         // divide by 4
-    and #%00001111                                              // zero out high nibble
-    ora stash                                                   // combine with high nibble
+    and #%00011111                                              // zero out high 3 bits
+    ora stash                                                   // combine with high 3 bits 
     sta zp.vid_ptr                                              // store in vid pointer low byte
 
     ldy #0
@@ -136,27 +136,26 @@ read_pixel: {
     phy
 
     tya                                                         // load row into A
-    ror
-    ror
-    ror
-    ror                                                         // divide by 16
-    and #%00001111
-    ora #>VRAM_START                                            // add vram start hi byte (%01110000)
+    lsr
+    lsr
+    lsr                                                         // divide by 8
+    ora #>VRAM_START                                            // add vram start hi byte
     sta zp.vid_ptr+1                                            // store in vid pointer hi byte
 
     tya                                                         // load row into A
-    and #%00001111                                              // take mod 16
+    and #%00000111                                              // take mod 8
     asl
     asl
     asl
-    asl                                                         // shift into high nibble
-    sta stash                                                    // stash high nibble
+    asl
+    asl                                                         // multiply by 32
+    sta stash                                                   // stash high 3 bits
 
     txa                                                         // load col into A
     ror
     ror                                                         // divide by 4
-    and #%00001111                                              // zero out high nibble
-    ora stash                                                    // combine with high nibble
+    and #%00011111                                              // zero out high 3 bits
+    ora stash                                                   // combine with high 3 bits 
     sta zp.vid_ptr                                              // store in vid pointer low byte
 
     ldy #0
@@ -191,7 +190,7 @@ bits_01:                                                        // col bits are 
     ror
     jmp return 
 
-bits_00:                                                        // col bits are 00. Shift A left six bits
+bits_00:                                                        // col bits are 00. Shift A right six bits (= left 3)
     lda stash
     rol
     rol
@@ -214,7 +213,7 @@ return:
 /* --------------------------------------------------------------------------------------- 
 Fill the screen with a solid color
 */
-.macro @fill_vid_screen_cg1(color) {
+.macro @fill_vid_screen_cg3(color) {
     .var color_byte = color + (color << 2) + (color << 4) + (color << 6) 
 
     pha
@@ -226,8 +225,8 @@ Fill the screen with a solid color
     lda #>VRAM_START
     sta zp.vid_ptr+1
 
-    stz vid_cg1.stash
-    ldx #4
+    stz vid_cg3.stash
+    ldx #12
     lda #color_byte
     ldy #0
 
@@ -239,7 +238,7 @@ clear_loop:
     inc zp.vid_ptr+1
 no_carry:
     sta (zp.vid_ptr),y
-    inc vid_cg1.stash
+    inc vid_cg3.stash
     bne clear_loop
     dex
     bpl clear_loop

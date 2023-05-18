@@ -129,21 +129,57 @@ If no target is given, store the result in arg1
 
 
 /* --------------------------------------------------------------------------------------- 
-Move a block of size bytes (at most 256) starting at source to target
+Move a block of <=256 bytes starting at source to target with a constant size
 */
 .macro @move_block(source, target, size) {
-    .if (size > $100) .error "Add 2-byte index support to move_block"
+    .if (size > $100) {
+        .error "use move_block_var_size"
+    } else {
+        pha
+        phx
+        ldx #size
+
+    loop:
+        lda source,x
+        sta target,x
+        dex
+        bne loop
+
+        plx
+        pla    
+    }
+          
+}
+
+
+/* --------------------------------------------------------------------------------------- 
+Move a block starting at source to target, with num bytes in size_addr,size_addr+1
+*/
+.macro @move_block_size_addr(source, target, size_addr) {
     pha
     phx
-    ldx #(size-1)
+    phy
+
+    mov2 #0 : zp.counter
+    mov2 #source : zp.read_ptr
+    mov2 #target : zp.write_ptr
 
 loop:
-    lda source,x
-    sta target,x
-    dex
-    bpl loop
+    mov (zp.read_ptr) : (zp.write_ptr)
+    inc2 zp.read_ptr
+    inc2 zp.write_ptr
+    inc2 zp.counter
 
+    lda size_addr+1
+    cmp zp.counter + 1
+    bcc loop
+
+    lda size_addr
+    cmp zp.counter
+    bcc loop
+
+    ply
     plx
-    pla            
+    pla        
 }
 

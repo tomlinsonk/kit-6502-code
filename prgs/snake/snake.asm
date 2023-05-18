@@ -9,35 +9,47 @@
 #define MACROS_ONLY
 #import "../../lib/macros.lib"
 #import "../../lib/vid.lib"
-#import "../../lib/vid_cg1.lib"
+#import "../../lib/vid_cg3.lib"
 #import "../../lib/kb.lib"
 #import "../../lib/uart.lib"
 #import "../../lib/sid.lib"
 
 .enum {UP, DOWN, LEFT, RIGHT}
 
-.label not_eq = zp.D
+.label dividend = zp.B 							// two bytes -- also uses zp.C
+.label divisor = zp.D 							// two bytes -- also uses zp.E
+.label remainder = zp.M 						// two bytes -- also uses zp.N
+
+.label not_eq = zp.F
+.label extend_count = zp.G
 .label head_ptr = zp.H
 .label tail_ptr = zp.I
 .label prev_tick = zp.J
 .label curr_dir = zp.K
 .label next_dir = zp.L
-.label food_x = zp.M
-.label food_y = zp.N
 .label rng = zp.P 								// two bytes -- also uses zp.Q
 
 
 .label game_timer = zp.cursor_blink_count
-.const initial_length = 8
+.const initial_length = 12
+.const extend_length = 8
 
-.const BG_COLOR = vid_cg1.YELLOW
-.const SNAKE_COLOR = vid_cg1.BLUE
-.const FOOD_COLOR = vid_cg1.RED
+.const BG_COLOR = vid_cg3.YELLOW
+.const SNAKE_COLOR = vid_cg3.BLUE
+.const FOOD_COLOR = vid_cg3.RED
+
+.const WIDTH = 128
+.const HEIGHT = 96
 
 .segment Code [outPrg="snake.prg", start=$1000] 
 reset:
-#if PCB
-	set_vid_mode_cg1()
+#if PCB 
+	set_vid_mode_cg3()
+
+// 	fill_vid_screen_cg3(vid_cg3.RED)
+
+// loop2:
+// 	jmp loop2
 
 	lda #$1F
 	sta sid.mode_vol
@@ -53,8 +65,16 @@ get_rand_seed:
 	sta rng
 
 	stz curr_sound
+	stz extend_count
 
-	fill_vid_screen_cg1(BG_COLOR)
+
+	fill_vid_screen_cg3(BG_COLOR)
+
+	mov2 #0 : score
+	jsr display_score
+
+	jsr high_scores.ensure_score_file
+
 
 	stz tail_ptr
 	ldx #(initial_length-1)
@@ -198,7 +218,7 @@ update_snake:
 
 	stz not_eq													// use not_eq to test if we ate food.
 	lda snake_y,x												// load head y position into A
-	cmp #64 													// check if we're out of Y bounds
+	cmp #HEIGHT 												// check if we're out of Y bounds
 	bcc in_y_bounds 											// if Y < 64, we're in bounds 
 	jsr play_death_sound	
 	jmp reset 													// otherwise, dead! reset.
@@ -209,7 +229,7 @@ in_y_bounds:
 	inc not_eq
 is_food_y:
 	lda snake_x,x
-	cmp #64 													// check if we're out of X bounds
+	cmp #WIDTH													// check if we're out of X bounds
 	bcc in_x_bounds 											// if Y < 64, we're in bounds 
 	jsr play_death_sound	
 	jmp reset 													// otherwise, dead! reset.
@@ -220,7 +240,7 @@ in_x_bounds:
 	inc not_eq 												
 is_food_x:
 
-	jsr vid_cg1.read_pixel 										// read the pixel value at new head location
+	jsr vid_cg3.read_pixel 										// read the pixel value at new head location
 	cmp #SNAKE_COLOR 											// check if it's the snake color
 	bne no_collision	 										// if not, we didn't collide.
 	jsr play_death_sound
@@ -228,22 +248,33 @@ is_food_x:
 no_collision:
 
 	lda #SNAKE_COLOR
-	jsr vid_cg1.write_pixel 											// draw the head
+	jsr vid_cg3.write_pixel 											// draw the head
 
 	lda not_eq
 	bne not_food
 	jsr play_food_sound
 	jsr new_food
-	jmp after_tail_update
+	inc2 score
+	jsr display_score
+
+	lda #extend_length
+	adc extend_count
+	sta extend_count
 not_food:
+
+	lda extend_count
+	beq tail_update
+	dec extend_count
+	jmp after_tail_update
 	
+tail_update:
 	ldx tail_ptr
 	lda snake_y,x
 	tay
 	lda snake_x,x
 	tax
 	lda #BG_COLOR
-	jsr vid_cg1.write_pixel 											// erase the tail
+	jsr vid_cg3.write_pixel 											// erase the tail
 
 	inc tail_ptr
 after_tail_update:
@@ -253,31 +284,84 @@ after_tail_update:
 
 
 /**
+ * Display the current score
+ */ 
+display_score: {
+	pha
+	phx
+	phy
+
+	mov2 score : dividend
+	mov2 #(vid_cg3.VRAM_START + 31 + 32*90) : zp.vid_ptr
+
+
+divide_loop:
+	mov2 #10 : divisor
+	jsr divide
+
+	lda remainder
+	asl
+	asl							// multiply by 4
+
+	clc
+	adc remainder
+	adc remainder				// add 2*remainder to get 6*remainder for table offset
+	tax
+
+	ldy #6
+digit_loop:
+
+	lda font_numbers,x
+	sta (zp.vid_ptr)
+	inx
+	add2 zp.vid_ptr : #32
+	dey
+	bne digit_loop
+
+	lda dividend+1
+	bne next_digit
+	lda dividend
+	bne next_digit
+	jmp done
+next_digit:
+	clc
+	add2 zp.vid_ptr : #(-6 * 32 - 1)
+	jmp divide_loop
+
+done:
+	ply
+	plx
+	pla
+	rts
+}
+
+/**
  * Generate new food at random position and draw it
  */
  new_food: {
 	jsr galois16o
 
 	lda rng
-	and #%00111111 												// take mod 64 for row
+	and #%01111111
+	cmp #90 													// take mod 90 for row (more likely to be in low rows, oh well)
+	bcc no_subtract
+	sec
+	sbc #90
+no_subtract:
 	tay
+	sta food_y
+
 	lda rng+1
-	and #%00111111 												// take mod 64 for col
+	and #%01111111												// take mod 128 for col
 	tax
-	jsr vid_cg1.read_pixel 										// read the pixel value at new rng location
+	sta food_x
+
+	jsr vid_cg3.read_pixel 										// read the pixel value at new rng location
 	cmp #SNAKE_COLOR 											// check if it's the snake color
 	beq new_food	 											// if it's on top of snake, retry
 
-	lda rng
-	and #%00111111 												// take mod 64 for row
-	sta food_y
-	tay
-	lda rng+1
-	and #%00111111
-	sta food_x
-	tax
 	lda #FOOD_COLOR
-	jsr vid_cg1.write_pixel
+	jsr vid_cg3.write_pixel
 
 	rts
 }
@@ -342,25 +426,150 @@ play_death_sound:
 
 	mov #$81 : sid.voice1_control
 
+	mov #$00 : sid.voice1_control
+
+	// jsr high_scores.save_high_score
+	jsr high_scores.display_high_scores
+
 wait:
 	jsr kb.get_press
 	beq wait
 
-	mov #$00 : sid.voice1_control
+	cmp #kb.ASCII_NEWLINE
+	bne wait
+
 
 	rts
+
+
+// fill_score_area: {
+// 	mov #>vid_cg3.VRAM_START : zp.vid_ptr+1
+// 	lda #<vid_cg3.VRAM_START 
+// 	clc
+// 	adc #24
+// 	sta zp.vid_ptr 	
+
+// 	ldx #96
+// col_loop:
+// 	lda #0
+// 	ldy #7
+// row_loop:
+// 	sta (zp.vid_ptr),y
+// 	dey
+// 	bpl row_loop
+	
+// 	add2 zp.vid_ptr : #32 
+
+// 	dex
+// 	bne col_loop
+// 	rts
+// }
+
+/**
+ * divide two-byte dividend by two-byte divisor. result goes in dividend, remainder in remainder
+ * 
+ */ 
+divide: {                            
+	pha
+	phx
+	phy
+
+	ldx #16                         // counter for bits to rotate
+	stz remainder					// initialize remainder to zero
+	stz remainder+1
+
+div_loop:
+	asl dividend                    // rotate zero into low bit of result, rotate into remainder
+	rol dividend+1
+	rol remainder
+	rol remainder+1
+
+	sec                 			// set carry bit for borrowing, try subtracting divisor from remainder
+	lda remainder
+	sbc divisor
+	tay
+	lda remainder+1
+	sbc divisor+1
+
+	bcc div_after_save              // if carry bit is clear, subtraction failed
+	sty remainder                   // if subtraction succeeded, save sub result and set bit of division result to 1
+	sta remainder+1
+	inc dividend
+
+div_after_save:
+	dex                 			// loop until x = 0 (16 times for two-byte division)
+	bne div_loop
+
+	ply
+	plx
+	pla
+	rts
+}
+
 
 
 note_table: 
 	.lohifill 12, 440 * pow(2, (i+48)/12 - 4.75) / (1843200 / 16777216)
 
 
+font_letters:
+	.byte 169,153,169,153,153,85    // A
+	.byte 165,153,165,153,165,85    // B
+	.byte 105,149,149,149,105,85    // C
+	.byte 165,153,153,153,165,85    // D
+	.byte 169,149,169,149,169,85    // E
+	.byte 169,149,169,149,149,85    // F
+	.byte 105,149,153,153,105,85    // G
+	.byte 153,153,169,153,153,85    // H
+	.byte 169,101,101,101,169,85    // I
+	.byte 89,89,89,153,169,85       // J
+	.byte 153,153,165,153,153,85    // K
+	.byte 149,149,149,149,169,85    // L
+	.byte 153,169,153,153,153,85    // M
+	.byte 169,153,153,153,153,85    // N
+	.byte 169,153,153,153,169,85    // O
+	.byte 169,153,169,149,149,85    // P
+	.byte 169,153,153,169,89,85     // Q
+	.byte 165,153,165,153,153,85    // R
+	.byte 105,149,101,89,165,85     // S
+	.byte 169,101,101,101,101,85    // T
+	.byte 153,153,153,153,169,85    // U
+	.byte 153,153,153,153,101,85    // V
+	.byte 153,153,153,169,153,85    // W
+	.byte 153,153,101,153,153,85    // X
+	.byte 153,153,169,101,101,85    // Y
+	.byte 169,89,101,149,169,85     // Z
+font_numbers:
+	.byte 101,153,153,153,101,85    // 0
+	.byte 101,165,101,101,169,85    // 1
+	.byte 165,89,101,149,169,85     // 2
+	.byte 169,89,105,89,169,85      // 3
+	.byte 153,153,169,89,89,85      // 4
+	.byte 169,149,169,89,165,85     // 5
+	.byte 105,149,169,153,169,85    // 6
+	.byte 169,89,101,149,149,85     // 7
+	.byte 169,153,169,153,169,85    // 8
+	.byte 169,153,169,89,165,85     // 9
 
-*=$2000 "Variables" virtual
+
+#import "high-scores.asm"
+
+
+
+.segment Variables [virtual, startAfter="Code", align=$100] 
 snake_x:
 	.fill 256, 0
 snake_y:
 	.fill 256, 0
 curr_sound:
 	.byte $00
+food_x:
+	.byte $00
+food_y:
+	.byte $00
+score:
+	.word $0000
+
+high_score_file:
+
 

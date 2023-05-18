@@ -61,10 +61,16 @@ Keyboard buffer
 /*
 Block 3
 ------------------------------------
-Storage for vid_cg1
+Assorted stashes and pointers
 */
-.label cg1_0 = $30
-.label cg1_1 = $31
+.label cg_0 = $30
+.label cg_1 = $31
+.label read_ptr = $32
+// $33
+.label write_ptr = $34
+// $35
+.label counter = $36
+// $37 
 
 
 /*
