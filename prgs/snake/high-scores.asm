@@ -47,10 +47,6 @@ done:
 	rts
 }
 
-name:
-	.text "kiran"
-	.byte $00
-
 /**
  * Save the game's score to the high score file
  */ 
@@ -58,9 +54,6 @@ save_high_score: {
 	pha
 	phx
 	phy
-
-	// For now, just append
-	jsr load_score_file
 
 	mov2 ssd.file_size_addr : fsize
 	mov2 #snake.high_score_file : zp.write_ptr
@@ -82,10 +75,12 @@ save_high_score: {
 
 	ldx #0
 name_loop:
-	lda name,x
+	lda player_name,x
+	
 	beq name_done
 	sta (zp.write_ptr)
 	inc2 zp.write_ptr
+	inc2 fsize
 	inx
 	jmp name_loop
 
@@ -94,7 +89,7 @@ name_done:
 	inc2 zp.write_ptr
 	sta (zp.write_ptr)
 
-	add2 fsize : #9
+	add2 fsize : #4
 
 	jsr save_file
 
@@ -119,6 +114,7 @@ save_file:
 load_score_file:
 	set_ssd_sector(high_score_sector)
 	move_block_size_addr(ssd.file_start_addr, snake.high_score_file, ssd.file_size_addr)
+	// brk
 	rts
 
 
@@ -206,8 +202,10 @@ done:
 	cpy #0
 	beq new_high_score
 	cpx #10
-	beq play_again
+	bne new_last_place_score
+	jmp play_again
 
+new_last_place_score:
 	mov2 zp.vid_ptr : new_score_row 				// store which row the new score is in
 	mov2 snake.score : snake.dividend 				// set up to print new score
 	jsr print_score
@@ -215,6 +213,36 @@ done:
 new_high_score:
 	set_vid_ptr(14, 3)
 	vid_write_string("new high score! type name")
+
+	mov2 new_score_row : zp.vid_ptr
+	inc zp.vid_ptr
+	inc zp.vid_ptr
+
+	ldx #0
+
+kb_loop:
+	jsr kb.get_press
+	beq kb_loop
+	bmi kb_loop
+
+	cmp #kb.ASCII_NEWLINE
+	beq name_entered
+
+	sta player_name,x
+	jsr vid.write_ascii
+	inc_vid_ptr()
+	inx
+	cpx #16
+	bne kb_loop
+
+wait_for_enter:
+	jsr kb.get_press
+	cmp #kb.ASCII_NEWLINE
+	bne wait_for_enter
+
+name_entered:
+	stz player_name,x
+	jsr save_high_score
 
 
 play_again:
@@ -278,3 +306,6 @@ vid_mode:
 new_score_row:
 	.word $0000
 
+player_name:
+	.fill 16, $00
+	.byte $00

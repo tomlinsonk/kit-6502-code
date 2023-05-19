@@ -170,13 +170,14 @@ loop:
     inc2 zp.write_ptr
     inc2 zp.counter
 
-    lda size_addr+1
-    cmp zp.counter + 1
+    lda zp.counter
+    cmp size_addr 
     bcc loop
 
-    lda size_addr
-    cmp zp.counter
+    lda zp.counter+1 
+    cmp size_addr+1
     bcc loop
+
 
     ply
     plx

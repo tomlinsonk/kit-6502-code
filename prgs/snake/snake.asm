@@ -428,7 +428,6 @@ play_death_sound:
 
 	mov #$00 : sid.voice1_control
 
-	// jsr high_scores.save_high_score
 	jsr high_scores.display_high_scores
 
 wait:
