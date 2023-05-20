@@ -48,7 +48,7 @@ done:
 }
 
 /**
- * Save the game's score to the high score file
+ * Save the game's score to the high score file; assumed high score file is loaded
  */ 
 save_high_score: {
 	pha
@@ -56,10 +56,71 @@ save_high_score: {
 	phy
 
 	mov2 ssd.file_size_addr : fsize
-	mov2 #snake.high_score_file : zp.write_ptr
+	mov2 #snake.high_score_file : zp.read_ptr
 
-	add2 zp.write_ptr : fsize
-	dec2 zp.write_ptr
+	ldy #0 											// load the length of name in y
+count_name_loop:
+	lda player_name,y
+	beq name_counted
+	iny
+	jmp count_name_loop
+name_counted:
+	
+	iny
+	iny
+	iny
+	iny 											// add 4 for header byte, score lo, hi, null terminator
+	
+read_entry_loop:
+	lda (zp.read_ptr)								// read header byte
+	beq reached_end									// if 0, file done
+	
+	inc2 zp.read_ptr
+	mov (zp.read_ptr) : old_score_stash
+	inc2 zp.read_ptr
+	mov (zp.read_ptr) : old_score_stash+1
+
+	lda old_score_stash+1 
+	cmp snake.score+1
+	bcc new_larger
+	bne new_not_larger
+	lda old_score_stash
+	cmp snake.score
+	bcs new_not_larger 								// check if the new score is larger then the one about to be printed
+
+new_larger:
+	dec2 zp.read_ptr
+	dec2 zp.read_ptr
+	mov2 zp.read_ptr : zp.counter 					// store pointer to first entry that's smaller than new score
+	jmp shift
+
+new_not_larger:
+skip_name_loop:
+	inc2 zp.read_ptr
+	lda (zp.read_ptr)
+	bne skip_name_loop
+
+	inc2 zp.read_ptr
+	jmp read_entry_loop
+
+reached_end:
+	mov2 zp.read_ptr : zp.counter
+shift:	
+	add2 fsize : #(snake.high_score_file) : zp.read_ptr
+
+shift_loop:
+	dec2 zp.read_ptr
+	lda (zp.read_ptr)
+	sta (zp.read_ptr),y
+
+	lda zp.counter
+	cmp zp.read_ptr
+	bne shift_loop
+	lda zp.counter+1
+	cmp zp.read_ptr+1
+	bne shift_loop
+
+	mov2 zp.read_ptr : zp.write_ptr
 
 	lda #$ff
 	sta (zp.write_ptr)
@@ -85,8 +146,6 @@ name_loop:
 	jmp name_loop
 
 name_done:
-	sta (zp.write_ptr)
-	inc2 zp.write_ptr
 	sta (zp.write_ptr)
 
 	add2 fsize : #4
@@ -132,7 +191,7 @@ display_high_scores: {
 	vid_write_string("high scores")
 
 	mov2 #snake.high_score_file : zp.read_ptr
-	set_vid_ptr(2, 3)
+	set_vid_ptr(2, 13)
 
 	ldx #0											// count number of entries in x
 	ldy #1 											// y = 1 means haven't inserted new score yet
@@ -163,6 +222,7 @@ read_score:
 	lda snake.dividend+1 
 	cmp snake.score+1
 	bcc new_larger
+	bne new_not_larger
 	lda snake.dividend 
 	cmp snake.score
 	bcs new_not_larger 								// check if the new score is larger then the one about to be printed
@@ -170,7 +230,7 @@ read_score:
 new_larger:
 	dey 											// decrement y to 0 to remember that we've made new score row 		
 	mov2 zp.vid_ptr : new_score_row 				// store which row the new score is in
-	add2 zp.read_ptr : #-3								// reset read_ptr to read beaten score again
+	add2 zp.read_ptr : #-3							// reset read_ptr to read beaten score again
 	mov2 snake.score : snake.dividend 				// set up to print new score
 	jsr print_score
 	jmp next_line 									// print the score, but not the name
@@ -193,7 +253,7 @@ next_line:
 	lda zp.vid_ptr 									// set vid_ptr to column 0
 	and #%11100000
 	sta zp.vid_ptr									
-	add2 zp.vid_ptr : #35 							// go to next row, column 3
+	add2 zp.vid_ptr : #45 							// go to next row, column 3
 
 	jmp print_score_loop
 
@@ -232,7 +292,7 @@ kb_loop:
 	jsr vid.write_ascii
 	inc_vid_ptr()
 	inx
-	cpx #16
+	cpx #10
 	bne kb_loop
 
 wait_for_enter:
@@ -273,7 +333,7 @@ divide_loop:
 	lda zp.vid_ptr 									// set vid_ptr to column 5
 	and #%11100000									// to do this, set to column 0 and add 5
 	clc
-	adc #5
+	adc #15
 	sta zp.vid_ptr
 
 	rts
@@ -302,6 +362,9 @@ ftype:
 
 vid_mode:
 	.byte $00
+
+old_score_stash:
+	.word $0000
 
 new_score_row:
 	.word $0000

@@ -56,8 +56,8 @@ reset:
 
     cld
 
-    jsr kb.init
     jsr vid.init
+<<<<<<< Updated upstream
     jsr vid.init_cursor
 
     set_vid_mode_text()
@@ -81,22 +81,30 @@ reset:
     ldx #$ff
     ldy #$24
     txs
+=======
+>>>>>>> Stashed changes
 
     brk                                             // start the monitor
-
+    nop
+    
 loop:
     jmp loop
 
 
 start_mon:    
     // Stack has R_HI, R_LO, P, X, A, Y <
+<<<<<<< Updated upstream
 
     sei                                
     jsr stash_zp_registers
     mov2 #irq : zp.irq_addr                         // set up irq handler
     cli   
 
+=======
+    jsr vid.init_cursor
+>>>>>>> Stashed changes
     jsr reset_prompt
+    jsr kb.init
 
 mon_loop:
     jsr kb.get_press
