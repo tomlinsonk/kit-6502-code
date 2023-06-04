@@ -22,9 +22,10 @@
 .label prev_tick = zp.H
 .label left_y = zp.I
 .label right_y = zp.J
-
 .label extended_next = zp.K 
 .label release_next = zp.L
+.label stash = zp.M
+
 
 
 .label rng = zp.P 								// two bytes -- also uses zp.Q
@@ -33,6 +34,12 @@
 
 .const start_y = 30
 .const paddle_size = 12
+
+.const MAX_X = 127
+.const MAX_Y = 63
+.const LEFT_X = 7
+.const RIGHT_X = 120
+
 
 .segment Code [outPrg="pong.prg", start=$1000] 
 reset:
@@ -89,9 +96,9 @@ clear_held_loop:
 
 	ldy #start_y
 left_loop:
-	ldx #2
+	ldx #(LEFT_X + 1)
 	jsr vid_rg1.set_pixel
-	ldx #1
+	ldx #LEFT_X
 	jsr vid_rg1.set_pixel
 	iny
 	cpy #(start_y + paddle_size)
@@ -99,9 +106,9 @@ left_loop:
 
 	ldy #start_y
 right_loop:
-	ldx #126
+	ldx #RIGHT_X
 	jsr vid_rg1.set_pixel
-	ldx #125
+	ldx #(RIGHT_X-1)
 	jsr vid_rg1.set_pixel	
 	iny
 	cpy #(start_y + paddle_size)
@@ -175,7 +182,7 @@ wall_bounce: {
 	lda ball_y
 	beq bounce
 
-	cmp #63
+	cmp #MAX_Y
 	bne done
 
 bounce:
@@ -194,27 +201,67 @@ paddle_bounce: {
 	ldx ball_x
 	ldy ball_y
 
-	cpx #3
+	lda ball_vy
+	clc
+	adc ball_y 							// load ball y+vy into A 
+	sta stash
+
+	cpx #(LEFT_X+2)
 	bne not_left_bounce
 	dex
 	jsr vid_rg1.read_pixel
-	bne bounce
+	bne bounce 							// bounce if pixel left of ball is paddle
+	ldy stash
+	jsr vid_rg1.read_pixel
+	bne bounce 							// also bounce if pixel left of ball + vy is paddle
+	ldy ball_y
 not_left_bounce:
 
-	cpx #124
-	bne no_bounce
+	cpx #(RIGHT_X-2)
+	bne done
 
 	inx
 	jsr vid_rg1.read_pixel
-	beq no_bounce
+	bne bounce
+	ldy stash
+	jsr vid_rg1.read_pixel
+	beq done
+
 
 bounce:
+	lda left_y
+	cpx #(MAX_X/2) 
+	bcc not_right_bounce
+	lda right_y
+not_right_bounce:
+
+	clc
+	adc #4
+	cmp ball_y
+	bcs upper_bounce
+
+	adc #3
+	cmp ball_y
+	bcc lower_bounce
+
+middle_bounce:
+	jmp negate_vx
+
+upper_bounce:
+	lda #-1
+	sta ball_vy
+	jmp negate_vx
+
+lower_bounce:
+	lda #1
+	sta ball_vy
+
+negate_vx:
 	sec
 	lda #0
 	sbc ball_vx
-	sta ball_vx
-
-no_bounce:
+	sta ball_vx 						// negate vx
+done:
 	rts
 }
 
@@ -225,7 +272,7 @@ check_for_score:
 	jmp reset
 not_score_on_left:
 
-	cmp #127
+	cmp #MAX_X
 	bne not_score_on_right
 	jmp reset
 not_score_on_right:
@@ -234,93 +281,108 @@ not_score_on_right:
 
 	
 
-move_right_up:
+move_right_up: {
+	lda right_y
+	beq done 								// if at top, don't move
+
 	lda #(paddle_size - 1)
 	clc
 	adc right_y
 	tay
-	ldx #126
+	ldx #RIGHT_X
 	jsr vid_rg1.clear_pixel
-	ldx #125
+	ldx #(RIGHT_X-1)
 	jsr vid_rg1.clear_pixel
 
 	dec right_y
 
 	ldy right_y
-	ldx #126
+	ldx #RIGHT_X
 	jsr vid_rg1.set_pixel
-	ldx #125
+	ldx #(RIGHT_X-1)
 	jsr vid_rg1.set_pixel
-
+done:
 	rts
+}
 
 
 
-move_right_down:
+move_right_down: {
 	lda #paddle_size
 	clc
 	adc right_y
+
+	cmp #(MAX_Y+1)
+	beq done 								// if at bottom, don't move
+
 	tay
-	ldx #126
+	ldx #RIGHT_X
 	jsr vid_rg1.set_pixel
-	ldx #125
+	ldx #(RIGHT_X-1)
 	jsr vid_rg1.set_pixel
 
 
 	ldy right_y
-	ldx #126
+	ldx #RIGHT_X
 	jsr vid_rg1.clear_pixel
-	ldx #125
+	ldx #(RIGHT_X-1)
 	jsr vid_rg1.clear_pixel
 
 	inc right_y
-
+done:
 	rts
+}
 
+move_left_up: {
+	lda left_y
+	beq done 								// if at top, don't move
 
-move_left_up:
 	lda #(paddle_size - 1)
 	clc
 	adc left_y
 	tay
-	ldx #1
+	ldx #LEFT_X
 	jsr vid_rg1.clear_pixel
-	ldx #2
+	ldx #(LEFT_X+1)
 	jsr vid_rg1.clear_pixel
 
 	dec left_y
 
 	ldy left_y
-	ldx #1
+	ldx #LEFT_X
 	jsr vid_rg1.set_pixel
-	ldx #2
+	ldx #(LEFT_X+1)
 	jsr vid_rg1.set_pixel
-
+done:
 	rts
+}
 
 
-
-move_left_down:
+move_left_down: {
 	lda #paddle_size
 	clc
 	adc left_y
+
+	cmp #(MAX_Y+1)
+	beq done 							// if at bottom, don't move
+
 	tay
-	ldx #1
+	ldx #LEFT_X
 	jsr vid_rg1.set_pixel
-	ldx #2
+	ldx #(LEFT_X+1)
 	jsr vid_rg1.set_pixel
 
 
 	ldy left_y
-	ldx #1
+	ldx #LEFT_X
 	jsr vid_rg1.clear_pixel
-	ldx #2
+	ldx #(LEFT_X+1)
 	jsr vid_rg1.clear_pixel
 
 	inc left_y
-
+done:
 	rts
-
+}
 
 
 update_held_keys: {
