@@ -23,7 +23,10 @@
 .label prev_tick = zp.D
 .label tmp = zp.E
 .label orientation = zp.F
-.label ptr = zp.G 			// 2 bytes: also uses zp.GH
+.label ptr = zp.G 			// 2 bytes: also uses zp.H
+.label x_stash = zp.I
+.label y_stash = zp.J
+
 
 .const BG_COLOR = vid_cg3.YELLOW
 .const BORDER_COLOR = vid_cg3.GREEN
@@ -57,7 +60,7 @@ get_rand_seed:
 
 	ldy #0
 	ldx #5
-	
+
 	jsr get_random_piece
 
 	jsr load_current_piece_color
@@ -75,12 +78,18 @@ loop:
 	mov #BG_COLOR_4 : draw_color
 	jsr draw_piece
 
+	jsr collision_check
+	beq new_piece
+
 	cpy #MAX_Y
 	bne not_bottom
+
+new_piece:
 	ldy #0
 	ldx #5
 	stz orientation
 	jsr get_random_piece
+
 not_bottom:
 	iny
 
@@ -313,6 +322,124 @@ vertical:
 }
 
 
+
+/**
+ * Check if the current piece can occupy playfield coordinates X, Y in its
+ * orientation. If piece would collide, set A to 0 and set Z flag.
+ * If no collision, set A to $FF and clear Z flag.  
+ */ 
+collision_check: {
+	phx
+	phy
+
+	sty y_stash
+
+	// iny
+	// iny
+	// jsr get_board
+	// bne yes_collision
+
+	lda current_piece
+
+	cmp #I_ID
+	bne not_I_piece
+	jmp check_I_collision
+not_I_piece:
+	
+	tay
+	mov pieces_lo,y : ptr
+	mov pieces_hi,y : ptr+1 	// put a pointer to the piece in ptr
+
+	ldy orientation
+	lda (ptr),y	 				// load the piece with the correct orientation into A
+
+	ldy y_stash 				// restore Y
+
+	dey
+	dex 						// go to block coords X-1, Y-1
+
+	stx x_stash
+
+	.for(var col=0; col<3; col++) { 	// check top row collisions
+		rol
+		bcc no_block
+		pha
+		jsr get_board
+		bne yes_collision
+		pla
+	no_block:
+		.if(col < 2) {
+			inx
+		}
+	}
+
+	iny
+
+	ldx x_stash 				// go to X-1, Y
+
+	rol
+	bcc no_middle_left
+	pha
+	jsr get_board
+	bne yes_collision
+	pla 		
+no_middle_left:
+
+	inx							// always check middle block
+	
+	pha
+	jsr get_board
+	bne yes_collision
+	pla 				
+
+	inx
+
+	rol
+	bcc no_middle_right
+	pha
+	jsr get_board
+	bne yes_collision
+	pla 			
+no_middle_right:
+
+	iny
+	ldx x_stash									// go to X-1, Y+1
+
+	.for(var col=0; col<3; col++) { 	// check bottom row collisions
+		rol
+		bcc no_block
+		pha
+		jsr get_board
+		bne yes_collision
+		pla 		
+	no_block:
+		.if(col < 2) {
+			inx
+		}
+	}
+
+
+no_collision:
+	lda #$ff
+	jmp done
+
+yes_collision:
+	pla
+	lda #0
+
+done:
+	ply
+	plx
+
+	ora #0 					// Set Z flag if A is 0
+	rts
+
+check_I_collision: 			// TODO
+	jmp no_collision
+
+}
+
+
 /**
  * Put the draw color of current_piece into draw_color
  */ 
@@ -339,7 +466,7 @@ done:
 
 
 /**
- * Set the speed to the value loaded in A
+ * Set the timer speed to the value loaded in A
  */ 
 set_speed: {
     stz via.T1_LO                       			// write all 0s to timer 1 lo
@@ -347,6 +474,10 @@ set_speed: {
 
 	rts
 }
+
+
+
+
 
 
 /**
@@ -391,7 +522,9 @@ plx
 }
 
 
-
+/**
+ * Draw the UI and playfield
+ */ 
 draw_playfield:
 	pha
 	phx
@@ -402,11 +535,11 @@ draw_playfield:
 	ldy #19
 
 row_loop:
-	ldx #9
+	ldx #10
 col_loop:
 	jsr draw_block
 	dex
-	bpl col_loop
+	bne col_loop
 	dey
 	bpl row_loop
 
@@ -465,6 +598,7 @@ bottom_loop:
  */ 
 set_board:
 	pha
+	phx
 
 	get_board_offset()
 	tax 					// put board offset in x
@@ -472,6 +606,7 @@ set_board:
 	lda #$ff
 	sta board,x
 
+	plx
 	pla
 	rts
 
@@ -480,13 +615,15 @@ set_board:
  * Sets a to $ff if filled, 0 otherwise (and sets Z flag)
  */ 
 get_board:
+	phx
 
 	get_board_offset()
 	tax 					// put board offset in x
 
 	lda board,x
-	ora #0 					// set Z flag according to board
 
+	plx
+	ora #0 					// set Z flag according to board
 	rts
 
 
