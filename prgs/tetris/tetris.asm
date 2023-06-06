@@ -26,6 +26,9 @@
 .label ptr = zp.G 			// 2 bytes: also uses zp.H
 .label x_stash = zp.I
 .label y_stash = zp.J
+.label old_orientation = zp.K
+.label new_orientation = zp.L
+
 
 
 .const BG_COLOR = vid_cg3.YELLOW
@@ -75,14 +78,16 @@ loop:
 	
 	sta prev_tick
 
-	mov #BG_COLOR_4 : draw_color
-	jsr draw_piece
-
+try_down_move:
+	iny
 	jsr collision_check
-	beq new_piece
+	beq do_commit
+	dey
+	jmp move_down
 
-	cpy #MAX_Y
-	bne not_bottom
+do_commit:
+	dey
+	jsr commit
 
 new_piece:
 	ldy #0
@@ -90,11 +95,15 @@ new_piece:
 	stz orientation
 	jsr get_random_piece
 
-not_bottom:
+move_down:
+
+	mov #BG_COLOR_4 : draw_color	// erase piece at old position
+	jsr draw_piece
+
 	iny
 
 	jsr load_current_piece_color
-	jsr draw_piece
+	jsr draw_piece 					// draw piece at new position
 
 no_tick:
 
@@ -105,13 +114,26 @@ no_tick:
 	cmp #kb.ASCII_SPACE
 	bne not_space
 
-	mov #BG_COLOR_4 : draw_color
-	jsr draw_piece
 
 	lda orientation
+	sta old_orientation
 	inc
 	and #%00000011
 	sta orientation
+	sta new_orientation
+
+	jsr collision_check
+	bne do_rotation
+	mov old_orientation : orientation
+	jmp not_space
+
+do_rotation:
+	mov old_orientation : orientation
+
+	mov #BG_COLOR_4 : draw_color
+	jsr draw_piece
+
+	mov new_orientation : orientation
 
 	jsr load_current_piece_color
 	jsr draw_piece
@@ -121,6 +143,14 @@ not_space:
 	cmp #kb.K_LEFT
 	bne not_left
 
+	dex
+	jsr collision_check
+	bne do_left_move
+	inx
+	jmp not_left
+
+do_left_move:
+	inx
 	mov #BG_COLOR_4 : draw_color
 	jsr draw_piece
 
@@ -135,6 +165,15 @@ not_left:
 	cmp #kb.K_RIGHT
 	bne not_right
 
+	inx
+	jsr collision_check
+	bne do_right_move
+	dex
+	jmp not_right
+
+do_right_move:
+
+	dex
 	mov #BG_COLOR_4 : draw_color
 	jsr draw_piece
 
@@ -144,6 +183,11 @@ not_left:
 	jsr draw_piece
 
 not_right:
+
+	cmp #kb.K_DOWN
+	bne not_down
+	jmp try_down_move
+not_down:
 
 	jmp loop
 
@@ -334,11 +378,6 @@ collision_check: {
 
 	sty y_stash
 
-	// iny
-	// iny
-	// jsr get_board
-	// bne yes_collision
-
 	lda current_piece
 
 	cmp #I_ID
@@ -425,6 +464,7 @@ no_collision:
 
 yes_collision:
 	pla
+yes_collision_no_pull:
 	lda #0
 
 done:
@@ -435,8 +475,166 @@ done:
 	rts
 
 check_I_collision: 			// TODO
+	jsr get_board
+	bne yes_collision_no_pull
+
+	lda #$01
+	bit orientation
+	bne vertical
+
+	inx
+	jsr get_board
+	bne yes_collision_no_pull
+
+	dex
+	dex
+	jsr get_board
+	bne yes_collision_no_pull
+
+	dex
+	jsr get_board
+	bne yes_collision_no_pull
+
 	jmp no_collision
 
+vertical:
+
+	iny
+	jsr get_board
+	bne yes_collision_no_pull
+
+	dey
+	dey
+	jsr get_board
+	bne yes_collision_no_pull
+
+	dey
+	jsr get_board
+	bne yes_collision_no_pull
+
+	jmp no_collision
+
+
+}
+
+
+
+commit: {
+	pha
+	phx
+	phy
+
+	sty y_stash
+	
+	lda current_piece
+
+	cmp #I_ID
+	bne not_I_piece
+	jmp commit_I_piece
+not_I_piece:
+	
+	tay
+	mov pieces_lo,y : ptr
+	mov pieces_hi,y : ptr+1 	// put a pointer to the piece in ptr
+
+	ldy orientation
+	lda (ptr),y	 				// load the piece with the correct orientation into A
+
+	ldy y_stash 				// restore Y
+
+	dey
+	dex 						// go to block coords X-1, Y-1
+
+	stx x_stash
+
+	.for(var col=0; col<3; col++) { 	// check top row collisions
+		rol
+		bcc no_block
+		jsr set_board
+	no_block:
+		.if(col < 2) {
+			inx
+		}
+	}
+
+	iny
+
+	ldx x_stash 				// go to X-1, Y
+
+	rol
+	bcc no_middle_left
+	jsr set_board	
+no_middle_left:
+
+	inx							// always set middle block
+	
+	jsr set_board		
+
+	inx
+
+	rol
+	bcc no_middle_right
+	jsr set_board
+no_middle_right:
+
+	iny
+	ldx x_stash									// go to X-1, Y+1
+
+	.for(var col=0; col<3; col++) { 	// check bottom row collisions
+		rol
+		bcc no_block
+		jsr set_board
+	no_block:
+		.if(col < 2) {
+			inx
+		}
+	}
+
+
+done:
+	ply
+	plx
+	pla
+
+	rts
+
+
+commit_I_piece:
+
+	jsr set_board
+
+	lda #$01
+	bit orientation
+	bne vertical
+
+	inx
+	jsr set_board
+
+	dex
+	dex
+	jsr set_board
+
+
+	dex
+	jsr set_board
+
+	jmp done
+
+vertical:
+
+	iny
+	jsr set_board
+
+
+	dey
+	dey
+	jsr set_board
+
+
+	dey
+	jsr set_board
+
+	jmp done
 }
 
 
