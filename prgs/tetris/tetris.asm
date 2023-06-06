@@ -967,11 +967,10 @@ shift_row_loop:
 	dey
 	jsr get_cell
 	beq empty
+	jsr load_block_color
 	iny
 	jsr set_cell
 
-	// jsr load_block_color
-	mov #BLUE_4 : draw_color
 	jsr draw_block
 
 	jmp next_col
