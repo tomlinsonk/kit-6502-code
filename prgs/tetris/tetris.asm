@@ -28,6 +28,7 @@
 .label y_stash = zp.J
 .label old_orientation = zp.K
 .label new_orientation = zp.L
+.label cleared_line_index = zp.M
 
 
 
@@ -88,6 +89,8 @@ try_down_move:
 do_commit:
 	dey
 	jsr commit
+
+	jsr handle_line_clears
 
 new_piece:
 	ldy #0
@@ -200,11 +203,53 @@ done:
  * Draw a block at playfield coordinates X, Y (X = 1, ..., 10; Y = 0, ... 19)
  * Color based on draw_color
  */ 
-draw_block:
+draw_block: {
 	pha
 	phx
 	phy
 
+	jsr load_block_vid_ptr
+
+	.for(var i=0; i<4; i++) {
+		mov draw_color : (zp.vid_ptr)
+		.if(i < 3) {
+			clc
+			add2 zp.vid_ptr : #32
+		}
+	}
+	
+	ply
+	plx
+	pla
+	rts
+}
+
+
+/**
+ * Load the color at playfield coordinates X, Y (X = 1, ..., 10; Y = 0, ... 19)
+ * into draw_color
+ */ 
+load_block_color: {
+	pha
+	phx
+	phy
+
+	jsr load_block_vid_ptr
+
+	mov (zp.vid_ptr) : draw_color
+
+	ply
+	plx
+	pla
+	rts
+}
+
+
+/**
+ * Convert X, Y from playfield block coords to screen block coords and
+ * load zp.vid_ptr with the address of the first block byte
+ */ 
+load_block_vid_ptr: {
 	iny
 	iny 						// add 2 to Y to get screen block coords
 
@@ -213,9 +258,7 @@ draw_block:
 	adc #10
 	tax 						// Add 10 to X to get screen block coords
 
-
 	// Block coords to byte: VRAM_START + Y * 4 * 32 + X
-
 
 	// VRAM high byte: >VRAM_START + Y // 2
 	lda #>vid_cg3.VRAM_START
@@ -240,19 +283,8 @@ y_odd:
 	adc zp.vid_ptr
 	sta zp.vid_ptr
 
-	.for(var i=0; i<4; i++) {
-		mov draw_color : (zp.vid_ptr)
-		.if(i < 3) {
-			clc
-			add2 zp.vid_ptr : #32
-		}
-	}
-	
-	ply
-	plx
-	pla
 	rts
-
+}
 
 
 /**
@@ -403,7 +435,7 @@ not_I_piece:
 		rol
 		bcc no_block
 		pha
-		jsr get_board
+		jsr get_cell
 		bne yes_collision
 		pla
 	no_block:
@@ -419,7 +451,7 @@ not_I_piece:
 	rol
 	bcc no_middle_left
 	pha
-	jsr get_board
+	jsr get_cell
 	bne yes_collision
 	pla 		
 no_middle_left:
@@ -427,7 +459,7 @@ no_middle_left:
 	inx							// always check middle block
 	
 	pha
-	jsr get_board
+	jsr get_cell
 	bne yes_collision
 	pla 				
 
@@ -436,7 +468,7 @@ no_middle_left:
 	rol
 	bcc no_middle_right
 	pha
-	jsr get_board
+	jsr get_cell
 	bne yes_collision
 	pla 			
 no_middle_right:
@@ -448,7 +480,7 @@ no_middle_right:
 		rol
 		bcc no_block
 		pha
-		jsr get_board
+		jsr get_cell
 		bne yes_collision
 		pla 		
 	no_block:
@@ -475,7 +507,7 @@ done:
 	rts
 
 check_I_collision: 			// TODO
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	lda #$01
@@ -483,16 +515,16 @@ check_I_collision: 			// TODO
 	bne vertical
 
 	inx
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	dex
 	dex
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	dex
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	jmp no_collision
@@ -500,16 +532,16 @@ check_I_collision: 			// TODO
 vertical:
 
 	iny
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	dey
 	dey
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	dey
-	jsr get_board
+	jsr get_cell
 	bne yes_collision_no_pull
 
 	jmp no_collision
@@ -518,7 +550,9 @@ vertical:
 }
 
 
-
+/**
+ * Lock in the current piece in X, Y. Saves it to the board state
+ */ 
 commit: {
 	pha
 	phx
@@ -550,7 +584,7 @@ not_I_piece:
 	.for(var col=0; col<3; col++) { 	// check top row collisions
 		rol
 		bcc no_block
-		jsr set_board
+		jsr set_cell
 	no_block:
 		.if(col < 2) {
 			inx
@@ -563,18 +597,18 @@ not_I_piece:
 
 	rol
 	bcc no_middle_left
-	jsr set_board	
+	jsr set_cell	
 no_middle_left:
 
 	inx							// always set middle block
 	
-	jsr set_board		
+	jsr set_cell		
 
 	inx
 
 	rol
 	bcc no_middle_right
-	jsr set_board
+	jsr set_cell
 no_middle_right:
 
 	iny
@@ -583,7 +617,7 @@ no_middle_right:
 	.for(var col=0; col<3; col++) { 	// check bottom row collisions
 		rol
 		bcc no_block
-		jsr set_board
+		jsr set_cell
 	no_block:
 		.if(col < 2) {
 			inx
@@ -601,38 +635,38 @@ done:
 
 commit_I_piece:
 
-	jsr set_board
+	jsr set_cell
 
 	lda #$01
 	bit orientation
 	bne vertical
 
 	inx
-	jsr set_board
+	jsr set_cell
 
 	dex
 	dex
-	jsr set_board
+	jsr set_cell
 
 
 	dex
-	jsr set_board
+	jsr set_cell
 
 	jmp done
 
 vertical:
 
 	iny
-	jsr set_board
+	jsr set_cell
 
 
 	dey
 	dey
-	jsr set_board
+	jsr set_cell
 
 
 	dey
-	jsr set_board
+	jsr set_cell
 
 	jmp done
 }
@@ -766,14 +800,14 @@ clear_board_loop:
 	ldx #0
 	ldy #19
 left_loop:
-	jsr set_board
+	jsr set_cell
 	dey
 	bpl left_loop
 
 	ldx #11
 	ldy #19
 right_loop:
-	jsr set_board
+	jsr set_cell
 	dey
 	bpl right_loop
 
@@ -781,7 +815,7 @@ right_loop:
 	ldx #11
 	ldy #20
 bottom_loop:
-	jsr set_board
+	jsr set_cell
 	dex
 	bpl bottom_loop
 
@@ -794,7 +828,7 @@ bottom_loop:
 /**
  * Set the board cell X, Y to filled 
  */ 
-set_board:
+set_cell:
 	pha
 	phx
 
@@ -808,11 +842,29 @@ set_board:
 	pla
 	rts
 
+
+/**
+ * Set the board cell X, Y to empty 
+ */ 
+clear_cell:
+	pha
+	phx
+
+	get_board_offset()
+	tax 					// put board offset in x
+
+	stz board,x
+
+	plx
+	pla
+	rts
+
+
 /**
  * Check if board cell X, Y is filled
  * Sets a to $ff if filled, 0 otherwise (and sets Z flag)
  */ 
-get_board:
+get_cell:
 	phx
 
 	get_board_offset()
@@ -842,6 +894,134 @@ get_board:
 	adc tmp 			// ... and add X			
 }
 
+
+
+/**
+ * Check if any lines have been cleared and handle them.
+ */ 
+handle_line_clears: {
+	pha
+	phx
+	phy
+
+	.for(var i=0; i<5; i++) {
+		stz cleared_lines + i 	// reset cleared lines
+	}
+
+	stz cleared_line_index
+
+	ldy #MAX_Y
+
+row_loop:
+	ldx #0
+col_loop:
+
+	jsr get_cell
+	bne has_block 			// check if col has block
+	dey
+	bpl row_loop 			// if next row exists, go to next row
+
+	jmp shift_lines 	// otherwise, done checking for clears. Shift lines
+
+
+has_block:
+	inx
+	cpx #11
+	bcc col_loop 			// check next column if next column exists
+
+	// else, row cleared!
+	dex
+	mov #BG_COLOR_4 : draw_color
+erase_row_loop:
+	jsr draw_block
+	jsr delay
+	dex
+	bne erase_row_loop
+
+	ldx cleared_line_index
+	tya
+	sta cleared_lines,x
+	inc cleared_line_index 	// store line cleared
+	
+	dey
+	bpl row_loop 			// check next row, if it exists
+
+
+
+	// for each cleared line in reverse order, shift everything above it down one, both in board state and screen
+shift_lines:
+	dec cleared_line_index
+	bmi done
+
+	phx
+	ldx cleared_line_index
+	lda cleared_lines,x
+	plx
+
+	tay
+
+shift_loop:
+	ldx #10
+
+shift_row_loop:
+	dey
+	jsr get_cell
+	beq empty
+	iny
+	jsr set_cell
+
+	// jsr load_block_color
+	mov #BLUE_4 : draw_color
+	jsr draw_block
+
+	jmp next_col
+
+empty:
+	iny
+	jsr clear_cell
+	mov #BG_COLOR_4 : draw_color
+	jsr draw_block
+
+next_col:
+	dex
+	bne shift_row_loop
+	dey
+	cpy #1
+	bcs shift_loop
+	jmp shift_lines
+							
+done:
+	ply
+	plx
+	pla
+	rts
+}
+
+
+
+
+/**
+ * Short delay
+ */ 
+delay: {
+	pha
+	phx
+	phy
+
+	ldx #50
+	ldy #0	
+loop:
+	dey
+	bne loop
+	dex
+	bne loop
+
+	ply
+	plx
+	pla
+
+	rts
+}
 
 /**
  16-bit RNG from https://github.com/bbbradsmith/prng_6502/blob/master/galois16.s
@@ -906,6 +1086,8 @@ o_piece:
 board:
 	.fill 256, $00
 
+cleared_lines:
+	.fill 5, $00
 
 score:
 	.word $0000
