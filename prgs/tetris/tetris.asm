@@ -1,3 +1,25 @@
+
+
+/**
+ * KiT Tetris 
+ * @author Kiran Tomlinson
+ * 
+ * Original game designed by Alexey Pajitnov
+ * 
+ * Todos:
+ * - Top-out detection
+ * - Playfield border
+ * - Scoring
+ *   - High scores
+ * - NES controller input
+ * - Two player mode???
+ * - Sound
+ * 	 - Music
+ *   - Sound effects
+ */  
+
+
+
 .cpu _65c02
 .encoding "ascii"
 .filenamespace tetris
@@ -13,6 +35,10 @@
 #import "../../lib/kb.lib"
 #import "../../lib/uart.lib"
 #import "../../lib/sid.lib"
+
+
+
+
 
 .enum {J_ID=0, L_ID=1, S_ID=2, Z_ID=3, T_ID=4, O_ID=5, I_ID=6}
 
@@ -45,6 +71,7 @@
 .const NEXT_Y = 10
 
 .const MAX_Y = 19
+.const SPAWN_X = 6
 
 .segment Code [outPrg="tetris.prg", start=$1000] 
 reset:
@@ -68,7 +95,7 @@ get_rand_seed:
 	stz next_piece
 
 	ldy #0
-	ldx #5
+	ldx #SPAWN_X
 
 	jsr get_random_piece
 	jsr draw_next_piece
@@ -99,8 +126,8 @@ do_commit:
 	jsr handle_line_clears
 
 new_piece:
-	ldy #0
-	ldx #5
+	ldy #-1
+	ldx #SPAWN_X
 	stz orientation
 	jsr get_random_piece
 	jsr draw_next_piece
@@ -215,6 +242,9 @@ draw_block: {
 	phx
 	phy
 
+	cpy #(MAX_Y+1)
+	bcs done
+
 	jsr load_block_vid_ptr
 
 	.for(var i=0; i<4; i++) {
@@ -225,6 +255,7 @@ draw_block: {
 		}
 	}
 	
+done:
 	ply
 	plx
 	pla
@@ -886,9 +917,13 @@ bottom_loop:
 /**
  * Set the board cell X, Y to filled 
  */ 
-set_mino:
+set_mino: {
 	pha
 	phx
+
+	lda #0
+	cpy #(MAX_Y+2)
+	bcs done
 
 	get_board_offset()
 	tax 					// put board offset in x
@@ -896,44 +931,54 @@ set_mino:
 	lda #$ff
 	sta board,x
 
+done:
 	plx
 	pla
 	rts
-
+}
 
 /**
  * Set the board cell X, Y to empty 
  */ 
-clear_mino:
+clear_mino: {
 	pha
 	phx
+
+	cpy #(MAX_Y+2)
+	bcs done
 
 	get_board_offset()
 	tax 					// put board offset in x
 
 	stz board,x
 
+done:
 	plx
 	pla
 	rts
-
+}
 
 /**
  * Check if board cell X, Y is filled
  * Sets a to $ff if filled, 0 otherwise (and sets Z flag)
  */ 
-has_mino:
+has_mino: {
 	phx
+
+	lda #0
+	cpy #(MAX_Y+2)
+	bcs done
 
 	get_board_offset()
 	tax 					// put board offset in x
 
 	lda board,x
 
+done:
 	plx
 	ora #0 					// set Z flag according to board
 	rts
-
+}
 
 /**
  * Convert X, Y index into board array offset
