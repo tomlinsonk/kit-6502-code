@@ -41,6 +41,9 @@
 .const GREEN_4 = vid_cg3.GREEN + (vid_cg3.GREEN << 2) + (vid_cg3.GREEN << 4) + (vid_cg3.GREEN << 6)
 
 
+.const NEXT_X = 14
+.const NEXT_Y = 10
+
 .const MAX_Y = 19
 
 .segment Code [outPrg="tetris.prg", start=$1000] 
@@ -61,11 +64,14 @@ get_rand_seed:
 	mov game_timer : prev_tick
 
 	stz orientation
+	stz current_piece 
+	stz next_piece
 
 	ldy #0
 	ldx #5
 
 	jsr get_random_piece
+	jsr draw_next_piece
 
 	jsr load_current_piece_color
 	jsr draw_piece
@@ -97,6 +103,7 @@ new_piece:
 	ldx #5
 	stz orientation
 	jsr get_random_piece
+	jsr draw_next_piece
 
 move_down:
 
@@ -435,7 +442,7 @@ not_I_piece:
 		rol
 		bcc no_block
 		pha
-		jsr get_cell
+		jsr has_mino
 		bne yes_collision
 		pla
 	no_block:
@@ -451,7 +458,7 @@ not_I_piece:
 	rol
 	bcc no_middle_left
 	pha
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision
 	pla 		
 no_middle_left:
@@ -459,7 +466,7 @@ no_middle_left:
 	inx							// always check middle block
 	
 	pha
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision
 	pla 				
 
@@ -468,7 +475,7 @@ no_middle_left:
 	rol
 	bcc no_middle_right
 	pha
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision
 	pla 			
 no_middle_right:
@@ -480,7 +487,7 @@ no_middle_right:
 		rol
 		bcc no_block
 		pha
-		jsr get_cell
+		jsr has_mino
 		bne yes_collision
 		pla 		
 	no_block:
@@ -507,7 +514,7 @@ done:
 	rts
 
 check_I_collision: 			// TODO
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	lda #$01
@@ -515,16 +522,16 @@ check_I_collision: 			// TODO
 	bne vertical
 
 	inx
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	dex
 	dex
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	dex
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	jmp no_collision
@@ -532,16 +539,16 @@ check_I_collision: 			// TODO
 vertical:
 
 	iny
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	dey
 	dey
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	dey
-	jsr get_cell
+	jsr has_mino
 	bne yes_collision_no_pull
 
 	jmp no_collision
@@ -584,7 +591,7 @@ not_I_piece:
 	.for(var col=0; col<3; col++) { 	// check top row collisions
 		rol
 		bcc no_block
-		jsr set_cell
+		jsr set_mino
 	no_block:
 		.if(col < 2) {
 			inx
@@ -597,18 +604,18 @@ not_I_piece:
 
 	rol
 	bcc no_middle_left
-	jsr set_cell	
+	jsr set_mino	
 no_middle_left:
 
 	inx							// always set middle block
 	
-	jsr set_cell		
+	jsr set_mino		
 
 	inx
 
 	rol
 	bcc no_middle_right
-	jsr set_cell
+	jsr set_mino
 no_middle_right:
 
 	iny
@@ -617,7 +624,7 @@ no_middle_right:
 	.for(var col=0; col<3; col++) { 	// check bottom row collisions
 		rol
 		bcc no_block
-		jsr set_cell
+		jsr set_mino
 	no_block:
 		.if(col < 2) {
 			inx
@@ -635,38 +642,38 @@ done:
 
 commit_I_piece:
 
-	jsr set_cell
+	jsr set_mino
 
 	lda #$01
 	bit orientation
 	bne vertical
 
 	inx
-	jsr set_cell
+	jsr set_mino
 
 	dex
 	dex
-	jsr set_cell
+	jsr set_mino
 
 
 	dex
-	jsr set_cell
+	jsr set_mino
 
 	jmp done
 
 vertical:
 
 	iny
-	jsr set_cell
+	jsr set_mino
 
 
 	dey
 	dey
-	jsr set_cell
+	jsr set_mino
 
 
 	dey
-	jsr set_cell
+	jsr set_mino
 
 	jmp done
 }
@@ -713,7 +720,8 @@ set_speed: {
 
 
 /**
- * Set the current piece to a random one. Uses NES Tetris logic:
+ * Set the current piece to next piece and set next piece to a random one. 
+ * Uses NES Tetris logic:
  * 1) generate random num 0-7. If 7 or equal to previous piece do roll 2.
  *    otherwise, return piece id
  * 2) generate random num 0-6, use piece
@@ -722,6 +730,9 @@ get_random_piece: {
 	pha
 	phy
 	phx
+
+	mov next_piece : current_piece
+
 	jsr galois16o
 
 	lda rng
@@ -746,10 +757,43 @@ subtract:
 	jmp subtract
 
 done:
-	sta current_piece
-plx
+	sta next_piece
+	plx
 	ply
 	pla
+	rts
+}
+
+
+
+/**
+ * Draw the next piece in the "next" square
+ */ 
+draw_next_piece: {
+	pha
+	phx
+	phy
+
+	ldx #NEXT_X
+	ldy #NEXT_Y
+
+	mov #BG_COLOR_4 : draw_color
+	jsr draw_piece
+
+	lda current_piece
+	pha
+
+	mov next_piece : current_piece
+	jsr load_current_piece_color
+	jsr draw_piece
+
+	pla
+	sta current_piece
+
+	ply
+	plx
+	pla
+
 	rts
 }
 
@@ -764,7 +808,7 @@ draw_playfield:
 
 	mov #BG_COLOR_4 : draw_color
 
-	ldy #19
+	ldy #MAX_Y
 
 row_loop:
 	ldx #10
@@ -774,6 +818,20 @@ col_loop:
 	bne col_loop
 	dey
 	bpl row_loop
+
+	ldy #12
+
+ns_row_loop:
+	ldx #16
+ns_col_loop:
+
+	jsr draw_block
+	dex
+	cpx #11
+	bne ns_col_loop
+	dey
+	cpy #8
+	bne ns_row_loop
 
 	ply
 	plx
@@ -800,14 +858,14 @@ clear_board_loop:
 	ldx #0
 	ldy #19
 left_loop:
-	jsr set_cell
+	jsr set_mino
 	dey
 	bpl left_loop
 
 	ldx #11
 	ldy #19
 right_loop:
-	jsr set_cell
+	jsr set_mino
 	dey
 	bpl right_loop
 
@@ -815,7 +873,7 @@ right_loop:
 	ldx #11
 	ldy #20
 bottom_loop:
-	jsr set_cell
+	jsr set_mino
 	dex
 	bpl bottom_loop
 
@@ -828,7 +886,7 @@ bottom_loop:
 /**
  * Set the board cell X, Y to filled 
  */ 
-set_cell:
+set_mino:
 	pha
 	phx
 
@@ -846,7 +904,7 @@ set_cell:
 /**
  * Set the board cell X, Y to empty 
  */ 
-clear_cell:
+clear_mino:
 	pha
 	phx
 
@@ -864,7 +922,7 @@ clear_cell:
  * Check if board cell X, Y is filled
  * Sets a to $ff if filled, 0 otherwise (and sets Z flag)
  */ 
-get_cell:
+has_mino:
 	phx
 
 	get_board_offset()
@@ -916,7 +974,7 @@ row_loop:
 	ldx #0
 col_loop:
 
-	jsr get_cell
+	jsr has_mino
 	bne has_block 			// check if col has block
 	dey
 	bpl row_loop 			// if next row exists, go to next row
@@ -965,11 +1023,11 @@ shift_loop:
 
 shift_row_loop:
 	dey
-	jsr get_cell
+	jsr has_mino
 	beq empty
 	jsr load_block_color
 	iny
-	jsr set_cell
+	jsr set_mino
 
 	jsr draw_block
 
@@ -977,7 +1035,7 @@ shift_row_loop:
 
 empty:
 	iny
-	jsr clear_cell
+	jsr clear_mino
 	mov #BG_COLOR_4 : draw_color
 	jsr draw_block
 
