@@ -1007,7 +1007,7 @@ delay: {
 	phx
 	phy
 
-	ldx #50
+	ldx #40
 	ldy #0	
 loop:
 	dey
@@ -1092,6 +1092,9 @@ score:
 	.word $0000
 
 current_piece:
+	.byte $00
+
+next_piece:
 	.byte $00
 
 draw_color:
