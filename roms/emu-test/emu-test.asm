@@ -4,17 +4,17 @@
 #define PCB
 
 
-*=$8000   
-.fill 4096, 0
+// *=$8000   
+// .fill 4096, 0
 
-*=$9000       
+// *=$9000       
 
 #import "kb.lib"
 #import "via.lib"
 #import "vid.lib"
 #import "zp.lib"
 
-
+*=$1000
 reset:
     jsr kb.init
 

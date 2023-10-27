@@ -28,6 +28,8 @@ reset:
 	mov2 #txt_buffer : zp.txt_ptr
 	mov2 #$0000 : filesize
 
+	bpt
+
 
 input_loop:
 	jsr kb.get_press
