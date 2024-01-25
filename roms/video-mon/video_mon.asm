@@ -95,7 +95,9 @@ start_mon:
     sei                                
     jsr stash_zp_registers
     mov2 #irq : zp.irq_addr                         // set up irq handler
-    cli   
+    cli
+
+    set_vid_mode_text()
 
     jsr reset_prompt
     jsr kb.init

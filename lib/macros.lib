@@ -19,7 +19,10 @@ Get the high byte for a two byte argument
 .function _2byteNextArgument(arg) {
     .if (arg.getType() == AT_IMMEDIATE) 
         .return CmdArgument(arg.getType(), >arg.getValue())
-    .return CmdArgument(arg.getType(), arg.getValue() + 1)
+    .if (arg.getType() == AT_ABSOLUTE || arg.getType() == AT_ABSOLUTEX || arg.getType() == AT_ABSOLUTEY) 
+        .return CmdArgument(arg.getType(), arg.getValue() + 1)
+    
+    .error "_2byteNextArgument doesn't support indirect addressing!!!"
 }
 
 /* --------------------------------------------------------------------------------------- 
