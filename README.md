@@ -1,6 +1,6 @@
 # Code for the KiT 6502 computer
 
-For more info on the KiT, see https://www.cs.cornell.edu/~kt/categories/6502/.
+For more info on the KiT, see [https://www.kirantomlinson.com/categories/6502/](https://www.kirantomlinson.com/category/6502/).
 
 ## Repository layout
 - `lib/` contains libraries imported by other programs (e.g., for keyboard and display routines)
