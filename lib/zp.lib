@@ -92,21 +92,43 @@ Blocks 5, 6
 ------------------------------------
 Storage for SID
 */
-.label track1_notes_addr = $50 						// two bytes
+.label sid_ptr = $50 									// two bytes
 // $51
-.label track2_notes_addr = $52 						// two bytes
-// $53
-.label track3_notes_addr = $54 						// two bytes
-// $55
-.label track1_lengths_addr = $56 					// two bytes
-// $57
-.label track2_lengths_addr = $58 					// two bytes
-// $59
-.label track3_lengths_addr = $5a 					// two bytes
-// $5b
-.label track1_insts_addr = $5c 						// two bytes
-// $5d
-.label track2_insts_addr = $5e 						// two bytes
-// $5f
-.label track3_insts_addr = $60 						// two bytes
-// $61
+.label sid_freq_addr = $62 								// two bytes
+// $63
+.label sid_atk_dec_addr = $64 							// two bytes
+// $65
+.label sid_sus_rel_addr = $66 							// two bytes
+// $67
+.label sid_control_addr = $68 							// two bytes
+// $69
+.label sid_pw_addr = $6a 								// two bytes
+
+/*
+Block 7
+------------------------------------
+Math scratchpad
+*/
+.label math0 = $70 
+.label math1 = $71
+.label math2 = $72 
+.label math3 = $73 
+.label math4 = $74 
+.label math5 = $75 
+.label math6 = $76 
+.label math7 = $77 
+.label math8 = $78 
+.label math9 = $79 
+.label mathA = $7a 
+.label mathB = $7b 
+.label mathC = $7c 
+.label mathD = $7d 
+.label mathE = $7e 
+.label mathF = $7f 
+
+
+/*
+Block 10
+------------------------------------
+Used by C compiler
+*/

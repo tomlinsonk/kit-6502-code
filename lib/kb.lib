@@ -198,7 +198,7 @@ keymap:
 keymap_shifted:
     .text @"?\$89?\$85\$83\$81\$82\$8c?\$8a\$88\$86\$84\$09~?"                    // 00-0F
     .text "?????Q!???ZSAW@?"                        // 10-1F
-    .text "?CXDE#$?? VFTR%?"                        // 20-2F
+    .text "?CXDE$#?? VFTR%?"                        // 20-2F
     .text "?NBHGY^???MJU&*?"                        // 30-3F
     .text "?<KIO)(??>?L:P_?"                        // 40-4F
     .text @"??\"?{+????\$0a}?|??"                   // 50-5F
@@ -249,5 +249,4 @@ modifier_done:
     jmp read_from_buffer                            // and try to get a real keypress
 not_modifier:
 }
-
 

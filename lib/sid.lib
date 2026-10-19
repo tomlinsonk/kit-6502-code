@@ -35,6 +35,60 @@
 
 .label rand = $7e1b
 
+
+setup_voice1_registers: {
+    pha
+    mov2 #voice1_freq : zp.sid_freq_addr
+    mov2 #voice1_pw : zp.sid_pw_addr
+    mov2 #voice1_control : zp.sid_control_addr
+    mov2 #voice1_atk_dec : zp.sid_atk_dec_addr
+    mov2 #voice1_sus_rel : zp.sid_sus_rel_addr
+    pla
+    rts
+}
+
+setup_voice2_registers: {
+    pha
+    mov2 #voice2_freq : zp.sid_freq_addr
+    mov2 #voice2_pw : zp.sid_pw_addr
+    mov2 #voice2_control : zp.sid_control_addr
+    mov2 #voice2_atk_dec : zp.sid_atk_dec_addr
+    mov2 #voice2_sus_rel : zp.sid_sus_rel_addr
+    pla
+    rts
+}
+
+setup_voice3_registers: {
+    pha
+    mov2 #voice3_freq : zp.sid_freq_addr
+    mov2 #voice3_pw : zp.sid_pw_addr
+    mov2 #voice3_control : zp.sid_control_addr
+    mov2 #voice3_atk_dec : zp.sid_atk_dec_addr
+    mov2 #voice3_sus_rel : zp.sid_sus_rel_addr
+    pla
+    rts
+}
+
+
+/**
+* Set up voice registers for the voice in X (0 = voice 1, 1 = voice 2, 2 = voice 3)
+*/
+setup_voice_registers: {
+    cpx #0
+    bne not_0
+    jsr setup_voice1_registers
+    jmp done
+not_0:
+    cpx #1
+    bne not_1
+    jsr setup_voice2_registers
+    jmp done
+not_1:
+    jsr setup_voice3_registers
+done:
+    rts
+}
+
 #endif
 
 .macro @init_sid_osc3_random() {

@@ -16,12 +16,20 @@
 
 
 
-.label triangle_on = %00010001
-.label off = %00000000
+.label track1_notes_addr = $50 						// two bytes
+.label track2_notes_addr = $52 						// two bytes
+.label track3_notes_addr = $54 						// two bytes
+.label track1_lengths_addr = $56 					// two bytes
+.label track2_lengths_addr = $58 					// two bytes
+.label track3_lengths_addr = $5a 					// two bytes
+.label track1_insts_addr = $5c 						// two bytes
+.label track2_insts_addr = $5e 						// two bytes
+.label track3_insts_addr = $60 						// two bytes
 
-.label timer_int_hi = $60
+.label OFF = %00000000
+.label TIMER_INT_HI = $60
 
-.const sh = $f0 
+.const SH = $f0 
 .const LOOP = $fe
 .const END = $ff
 
@@ -35,7 +43,7 @@ start:
 	lda #%10000010
 	sta sid.res_filter
 
-	 mov2 #$1fff : sid.filter_cutoff
+	mov2 #$1fff : sid.filter_cutoff
 
 	lda #$1F
 	sta sid.mode_vol
@@ -57,7 +65,7 @@ start:
 	stz track2_duration_left
 	stz track3_duration_left
 
-	stz is_done
+	stz music_is_done
 
 	sei
 	mov2 #irq : zp.irq_addr 
@@ -66,7 +74,7 @@ start:
 	sta via.IER 									// enable timer 2 interrupts
 	
 	stz via.T2_LO                                   // set up timer 2 for 50Hz interrupts
-    ldx #timer_int_hi
+    ldx #TIMER_INT_HI
     stx via.T2_HI
 	cli
 
@@ -77,9 +85,9 @@ done:
 music_irq:
 	pha
 
-	lda is_done
+	lda music_is_done
 	beq play_tracks
-	lda #off
+	lda #OFF
 	sta sid.voice1_control
 	sta sid.voice2_control
 	sta sid.voice3_control
@@ -88,15 +96,15 @@ music_irq:
 
 play_tracks:
     play_track(track1_duration_left, track1_curr_note, track1_curr_pattern, track1_patterns,
-			   track1_pattern_done, zp.track1_notes_addr, zp.track1_lengths_addr, zp.track1_insts_addr,
+			   track1_pattern_done, track1_notes_addr, track1_lengths_addr, track1_insts_addr,
 		       sid.voice1_freq, sid.voice1_atk_dec, sid.voice1_sus_rel, sid.voice1_control, sid.voice1_pw)
 
     play_track(track2_duration_left, track2_curr_note, track2_curr_pattern, track2_patterns,
-			   track2_pattern_done, zp.track2_notes_addr, zp.track2_lengths_addr, zp.track2_insts_addr,
+			   track2_pattern_done, track2_notes_addr, track2_lengths_addr, track2_insts_addr,
 		       sid.voice2_freq, sid.voice2_atk_dec, sid.voice2_sus_rel, sid.voice2_control, sid.voice2_pw)
 
     play_track(track3_duration_left, track3_curr_note, track3_curr_pattern, track3_patterns,
-    		   track3_pattern_done, zp.track3_notes_addr, zp.track3_lengths_addr, zp.track3_insts_addr,
+    		   track3_pattern_done, track3_notes_addr, track3_lengths_addr, track3_insts_addr,
 		       sid.voice3_freq, sid.voice3_atk_dec, sid.voice3_sus_rel, sid.voice3_control, sid.voice3_pw)
 
 music_irq_done:
@@ -122,7 +130,7 @@ load_pattern:
 
 	cpy #END
 	bne not_end
-	dec is_done
+	dec music_is_done
 	jmp track_done
 not_end:
 
@@ -173,7 +181,7 @@ new_note:
 	jmp load_pattern
 not_done:
 
-	cpx #sh
+	cpx #SH
 	beq do_rest
 
 	lda note_table.lo,x
@@ -201,7 +209,7 @@ not_done:
 	jmp track_done
 
 do_rest:
-	lda #off
+	lda #OFF
 	sta control_reg	
 
 track_done:				
@@ -251,7 +259,7 @@ no_ca1_irq:
     ror
     bcc no_timer2_irq
     stz via.T2_LO                                                   // write zeros to timer 2 lo
-    ldx #timer_int_hi
+    ldx #TIMER_INT_HI
     stx via.T2_HI
     jsr music_irq 
 no_timer2_irq:
@@ -406,16 +414,16 @@ pattern_insts_hi:
 
 // Index into note_table
 pattern0_notes:
-	.byte  E5,  sh,  B4,  sh,  C5,  sh,  D5,  sh
-	.byte  C5,  sh,  B4,  sh,  A4,  sh,  A4,  sh
-	.byte  C5,  sh,  E5,  sh,  D5,  sh,  C5,  sh
-	.byte  B4,  sh,  C5,  sh,  D5,  sh,  E5,  sh
-	.byte  C5,  sh,  A4,  sh,  A4,  sh
-	.byte  sh,  D5,  sh,  F5,  sh,  A5,  sh,  G5
-	.byte  sh,  F5,  sh,  E5,  sh,  C5,  sh,  E5
-	.byte  sh,  D5,  sh,  C5,  sh,  B4,  sh,  B4
-	.byte  sh,  C5,  sh,  D5,  sh,  E5,  sh,  C5
-	.byte  sh,  A4,  sh,  A4,  sh, END
+	.byte  E5,  SH,  B4,  SH,  C5,  SH,  D5,  SH
+	.byte  C5,  SH,  B4,  SH,  A4,  SH,  A4,  SH
+	.byte  C5,  SH,  E5,  SH,  D5,  SH,  C5,  SH
+	.byte  B4,  SH,  C5,  SH,  D5,  SH,  E5,  SH
+	.byte  C5,  SH,  A4,  SH,  A4,  SH
+	.byte  SH,  D5,  SH,  F5,  SH,  A5,  SH,  G5
+	.byte  SH,  F5,  SH,  E5,  SH,  C5,  SH,  E5
+	.byte  SH,  D5,  SH,  C5,  SH,  B4,  SH,  B4
+	.byte  SH,  C5,  SH,  D5,  SH,  E5,  SH,  C5
+	.byte  SH,  A4,  SH,  A4,  SH, END
 
 pattern0_lengths:
 	.byte  16,  16,  04,  12,  04,  12,  16,  16
@@ -444,22 +452,22 @@ pattern0_insts:
 
 
 pattern1_notes:
-	.byte  E2,  sh,  E3,  sh,  E2,  sh,  E3,  sh
-	.byte  E2,  sh,  E3,  sh,  E2,  sh,  E3,  sh
-	.byte  A2,  sh,  A3,  sh,  A2,  sh,  A3,  sh
-	.byte  A2,  sh,  A3,  sh,  A2,  sh,  A3,  sh
-	.byte  g2,  sh,  g3,  sh,  g2,  sh,  g3,  sh
-	.byte  g2,  sh,  g3,  sh,  g2,  sh,  g3,  sh
-	.byte  A2,  sh,  A3,  sh,  A2,  sh,  A3,  sh
-	.byte  A2,  sh,  A3,  sh,  B2,  sh,  C3,  sh
-	.byte  D3,  sh,  D2,  sh,  D3,  sh,  D2,  sh
-	.byte  D3,  sh,  D2,  sh,  A2,  sh,  F2,  sh
-	.byte  C2,  sh,  C3,  sh,  C2,  sh,  C3,  sh
-	.byte  C2,  sh,  C3,  sh,  G2,  sh,  G3,  sh
-	.byte  B2,  sh,  B3,  sh,  B2,  sh,  B3,  sh
-	.byte  E2,  sh,  E3,  sh,  g2,  sh,  g3,  sh
-	.byte  A2,  sh,  E3,  sh,  A2,  sh,  E3,  sh
-	.byte  A2,  sh, END
+	.byte  E2,  SH,  E3,  SH,  E2,  SH,  E3,  SH
+	.byte  E2,  SH,  E3,  SH,  E2,  SH,  E3,  SH
+	.byte  A2,  SH,  A3,  SH,  A2,  SH,  A3,  SH
+	.byte  A2,  SH,  A3,  SH,  A2,  SH,  A3,  SH
+	.byte  g2,  SH,  g3,  SH,  g2,  SH,  g3,  SH
+	.byte  g2,  SH,  g3,  SH,  g2,  SH,  g3,  SH
+	.byte  A2,  SH,  A3,  SH,  A2,  SH,  A3,  SH
+	.byte  A2,  SH,  A3,  SH,  B2,  SH,  C3,  SH
+	.byte  D3,  SH,  D2,  SH,  D3,  SH,  D2,  SH
+	.byte  D3,  SH,  D2,  SH,  A2,  SH,  F2,  SH
+	.byte  C2,  SH,  C3,  SH,  C2,  SH,  C3,  SH
+	.byte  C2,  SH,  C3,  SH,  G2,  SH,  G3,  SH
+	.byte  B2,  SH,  B3,  SH,  B2,  SH,  B3,  SH
+	.byte  E2,  SH,  E3,  SH,  g2,  SH,  g3,  SH
+	.byte  A2,  SH,  E3,  SH,  A2,  SH,  E3,  SH
+	.byte  A2,  SH, END
 
 pattern1_lengths:
 	.byte  04,  12,  04,  12,  04,  12,  04,  12
@@ -500,10 +508,10 @@ pattern1_insts:
 
 
 pattern2_notes:
-	.byte  sh, a7, sh,  a7, sh,  a7, sh, a7
-	.byte  sh, a7, sh,  a7, sh
-	.byte  sh, a7, sh,  a7, sh,  a7, sh, a7
-	.byte  sh, a7, sh, END
+	.byte  SH, a7, SH,  a7, SH,  a7, SH, a7
+	.byte  SH, a7, SH,  a7, SH
+	.byte  SH, a7, SH,  a7, SH,  a7, SH, a7
+	.byte  SH, a7, SH, END
 
 
 pattern2_lengths:
@@ -520,7 +528,7 @@ pattern2_insts:
 
 
 pattern3_notes:
-	.byte sh, END
+	.byte SH, END
 
 
 pattern3_lengths:
@@ -571,9 +579,9 @@ pattern3_insts:
 
 // // Index into note_table
 // pattern0_notes:
-// 	.byte  48, sh,  47,  45, sh,  43, sh,  41
-// 	.byte sh,  43,  45, sh,  48, sh,  47, sh
-// 	.byte  45,  43, sh,  41, sh,  40, sh, END
+// 	.byte  48, SH,  47,  45, SH,  43, SH,  41
+// 	.byte SH,  43,  45, SH,  48, SH,  47, SH
+// 	.byte  45,  43, SH,  41, SH,  40, SH, END
 
 // pattern0_lengths:
 // 	.byte  12,  06,  06,  06,  06,  06,  06,  12
@@ -599,10 +607,10 @@ pattern3_insts:
 
 
 // pattern2_notes:
-// 	.byte  36, sh,  72, sh,  36, sh,  72, sh
-// 	.byte  36, sh,  72, sh,  36, sh,  72, sh
-// 	.byte  36, sh,  72, sh,  36, sh,  72, sh
-// 	.byte  36, sh,  72, sh,  36, sh,  72, sh, END
+// 	.byte  36, SH,  72, SH,  36, SH,  72, SH
+// 	.byte  36, SH,  72, SH,  36, SH,  72, SH
+// 	.byte  36, SH,  72, SH,  36, SH,  72, SH
+// 	.byte  36, SH,  72, SH,  36, SH,  72, SH, END
 
 
 // pattern2_lengths:
@@ -619,7 +627,7 @@ pattern3_insts:
 
 
 // pattern3_notes:
-// 	.byte sh, END
+// 	.byte SH, END
 
 
 // pattern3_lengths:
@@ -671,6 +679,6 @@ track3_curr_pattern:
 track3_pattern_done:
 	.byte $00
 
-is_done:
+music_is_done:
 	.byte $00
 

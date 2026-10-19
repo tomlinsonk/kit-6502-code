@@ -25,3 +25,7 @@ To program EEPROM:
 To read EEPROM:
 
 `minipro -p AT28C256 -r rom.bin`
+
+To assemble a program for loading over the serial port:
+
+`ka -libdir ../../roms/video-mon prg.asm`

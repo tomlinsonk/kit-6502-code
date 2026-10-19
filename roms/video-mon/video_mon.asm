@@ -99,6 +99,7 @@ start_mon:
 
     set_vid_mode_text()
 
+    // jsr vid.shift_up_1_clear_bottom
     jsr reset_prompt
     jsr kb.init
 
@@ -493,6 +494,9 @@ get_yn_loop:
 
     cmp #'r'
     bne dont_run
+    shift_vid_up(2, 0)                              // move display up                                                    
+    fill_vid_row(14, ' ')
+    set_vid_ptr(14, 0)
     jmp go
 dont_run:
 

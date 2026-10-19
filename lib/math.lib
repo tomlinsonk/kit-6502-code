@@ -4,19 +4,22 @@
 .cpu _65c02
 .encoding "ascii"
 
+
+#if !MACROS_ONLY
+
 #import "zp.lib"
 
-.label dividend = zp.B 								// two bytes (B, C)
-.label divisor = zp.D 								// two bytes (D, E)
-.label quotient = zp.B 								// two bytes (B, C); alias for dividend
-.label remainder = zp.F 							// two bytes (F, G)
+.label dividend = zp.math0 						    // two bytes
+.label divisor = zp.math2 							// two bytes
+.label quotient = zp.math0 								// two bytes; alias for dividend
+.label remainder = zp.math4 							// two bytes
 
 /* --------------------------------------------------------------------------------------- 
-Divide two-byte number in dividend (zp.B,C) by two-byte number in divisor (zp.D,E).
-Result goes in quotient (zp.B,C), remainder in remainder (zp.F,E).
+Divide two-byte number in dividend by two-byte number in divisor.
+Result goes in quotient, remainder in remainder.
 Overwrites dividend and divisor.
 */
-divide16:                                                        
+divide16: {                                                      
     pha
     phx
     phy
@@ -51,3 +54,6 @@ div_after_save:
     plx
     pla
     rts
+}
+
+#endif

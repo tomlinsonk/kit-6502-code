@@ -8,8 +8,9 @@
 #import "../../lib/ssd.lib"
 
 
-.const high_score_sector = $3f
-
+.const high_score_sector = $3e
+.label score = tetris.score
+.label high_score_file = tetris.high_score_file
 
 /**
 High score file format:
@@ -24,6 +25,7 @@ High score file format:
 - If the byte after the null-terminated string is $ff, there is another entry
 - If the byte after the null-terminated string is $00, this is the end of the file
 */ 
+
 
 
 /**
@@ -41,7 +43,7 @@ ensure_score_file: {
 	jmp done
 save:
 	mov2 #1 : fsize
-	stz snake.high_score_file
+	stz high_score_file
 	jsr save_file
 done:
 	rts
@@ -56,7 +58,7 @@ save_high_score: {
 	phy
 
 	mov2 ssd.file_size_addr : fsize
-	mov2 #snake.high_score_file : zp.read_ptr
+	mov2 #high_score_file : zp.read_ptr
 
 	ldy #0 											// load the length of name in y
 count_name_loop:
@@ -81,11 +83,11 @@ read_entry_loop:
 	mov (zp.read_ptr) : old_score_stash+1
 
 	lda old_score_stash+1 
-	cmp snake.score+1
+	cmp tetris.score+1
 	bcc new_larger
 	bne new_not_larger
 	lda old_score_stash
-	cmp snake.score
+	cmp tetris.score
 	bcs new_not_larger 								// check if the new score is larger then the one about to be printed
 
 new_larger:
@@ -106,7 +108,7 @@ skip_name_loop:
 reached_end:
 	mov2 zp.read_ptr : zp.counter
 shift:	
-	add2 fsize : #(snake.high_score_file) : zp.read_ptr
+	add2 fsize : #(high_score_file) : zp.read_ptr
 
 shift_loop:
 	dec2 zp.read_ptr
@@ -126,11 +128,11 @@ shift_loop:
 	sta (zp.write_ptr)
 	inc2 zp.write_ptr
 
-	lda snake.score
+	lda score
 	sta (zp.write_ptr)
 	inc2 zp.write_ptr
 
-	lda snake.score+1
+	lda score+1
 	sta (zp.write_ptr)
 	inc2 zp.write_ptr
 
@@ -172,7 +174,7 @@ save_file:
 
 load_score_file:
 	set_ssd_sector(high_score_sector)
-	move_block_size_addr(ssd.file_start_addr, snake.high_score_file, ssd.file_size_addr)
+	move_block_size_addr(ssd.file_start_addr, high_score_file, ssd.file_size_addr)
 	// brk
 	rts
 
@@ -190,7 +192,7 @@ display_high_scores: {
 	set_vid_ptr(0, 10)
 	vid_write_string("high scores")
 
-	mov2 #snake.high_score_file : zp.read_ptr
+	mov2 #high_score_file : zp.read_ptr
 	set_vid_ptr(2, 13)
 
 	ldx #0											// count number of entries in x
@@ -211,27 +213,27 @@ print_next_entry:
 	inx
 
 read_score:
-	mov (zp.read_ptr) : snake.dividend
+	mov (zp.read_ptr) : math.dividend
 	inc2 zp.read_ptr
-	mov (zp.read_ptr) : snake.dividend+1
+	mov (zp.read_ptr) : math.dividend+1
 	inc2 zp.read_ptr
 
 	cpy #1
 	bcc new_not_larger 								// if we've already made row for new score, skip checking for larger
 
-	lda snake.dividend+1 
-	cmp snake.score+1
+	lda math.dividend+1 
+	cmp score+1
 	bcc new_larger
 	bne new_not_larger
-	lda snake.dividend 
-	cmp snake.score
+	lda math.dividend 
+	cmp score
 	bcs new_not_larger 								// check if the new score is larger then the one about to be printed
 
 new_larger:
 	dey 											// decrement y to 0 to remember that we've made new score row 		
 	mov2 zp.vid_ptr : new_score_row 				// store which row the new score is in
 	add2 zp.read_ptr : #-3							// reset read_ptr to read beaten score again
-	mov2 snake.score : snake.dividend 				// set up to print new score
+	mov2 score : math.dividend 				// set up to print new score
 	jsr print_score
 	jmp next_line 									// print the score, but not the name
 
@@ -267,7 +269,7 @@ done:
 
 new_last_place_score:
 	mov2 zp.vid_ptr : new_score_row 				// store which row the new score is in
-	mov2 snake.score : snake.dividend 				// set up to print new score
+	mov2 score : math.dividend 				// set up to print new score
 	jsr print_score
 
 new_high_score:
@@ -317,9 +319,9 @@ play_again:
 
 print_score: {
 divide_loop:
-	mov2 #10 : snake.divisor
-	jsr snake.divide
-	lda snake.remainder
+	mov2 #10 : math.divisor
+	jsr math.divide16
+	lda math.remainder
 
 	clc
 	adc #'0'
@@ -327,7 +329,7 @@ divide_loop:
 	jsr vid.write_ascii
 	dec_vid_ptr()
 
-	lda snake.dividend
+	lda math.dividend
 	bne divide_loop
 
 	lda zp.vid_ptr 									// set vid_ptr to column 5
@@ -339,8 +341,6 @@ divide_loop:
 	rts
 }
 
-
-
 fname:
 	.text "high scores"
 	.byte $00
@@ -349,7 +349,7 @@ checksum:
 	.word $efbe
 
 load_addr:
-	.word snake.high_score_file
+	.word high_score_file
 
 start_addr:
 	.word $adde
@@ -372,3 +372,4 @@ new_score_row:
 player_name:
 	.fill 16, $00
 	.byte $00
+
