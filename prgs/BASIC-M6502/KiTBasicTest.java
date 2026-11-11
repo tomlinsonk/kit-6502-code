@@ -13,6 +13,7 @@ public class KiTBasicTest {
     private final Bus bus;
     private final VIA via1;
     private final VIA via2;
+    private final int[] ssd;
     private final Map<String, Integer> symbols = new HashMap<>();
     private final StringBuilder output = new StringBuilder();
 
@@ -33,6 +34,10 @@ public class KiTBasicTest {
         bus = (Bus) field(kit, "bus");
         via1 = (VIA) field(kit, "via1");
         via2 = (VIA) field(kit, "via2");
+        Object ssdDevice = field(kit, "ssd");
+        Field data = ssdDevice.getClass().getDeclaredField("data");
+        data.setAccessible(true);
+        ssd = (int[]) data.get(ssdDevice);
         ((UART) field(kit, "uart")).loadPrg(program.toFile());
     }
 
@@ -150,6 +155,117 @@ public class KiTBasicTest {
             + "\nRecent console:\n" + output.substring(Math.max(0, output.length() - 300)));
     }
 
+    private int ssdByte(int sector, int offset) {
+        return ssd[sector * 4096 + offset];
+    }
+
+    private int ssdWord(int sector, int offset) {
+        return ssdByte(sector, offset) | ssdByte(sector, offset + 1) << 8;
+    }
+
+    private String ssdName(int sector) {
+        StringBuilder name = new StringBuilder();
+        for (int i = 0x10; ssdByte(sector, i) != 0; i++) name.append((char) ssdByte(sector, i));
+        return name.toString();
+    }
+
+    private int[] program() {
+        int start = word("TXTTAB");
+        int[] bytes = new int[word("VARTAB") - start];
+        for (int i = 0; i < bytes.length; i++) bytes[i] = bus.debugRead(start + i);
+        return bytes;
+    }
+
+    private void ok(String text) {
+        String result = command(text);
+        require(result.trim().equals("OK"), text + " failed:\n" + result);
+    }
+
+    private void saveLoad() {
+        java.util.Arrays.fill(ssd, 0xff);
+
+        command("new");
+        command("10 print \"Saved\";:for i=1 to 3:print i;:next");
+        int[] small = program();
+        ok("save 5,\"Hello\"");
+        require(ssdByte(5, 0) == 0 && ssdByte(5, 1) == 0x20, "Saved file must be KSF data");
+        require(ssdWord(5, 2) == word("TXTTAB") && ssdWord(5, 4) == small.length, "Saved address and size");
+        require(ssdByte(5, 8) == 0xff && ssdName(5).equals("Hello"), "Single-sector header");
+        command("new");
+        ok("load 5");
+        require(java.util.Arrays.equals(program(), small), "LOAD by sector must restore the program");
+        contains(command("list").replace("\n", ""), "10 PRINT \"Saved\";:FOR I=1 TO 3:PRINT I;:NEXT");
+        contains(command("run"), "Saved 1  2  3");
+
+        command("new");
+        command("10 print \"Second\"");
+        ok("save \"Second\"");
+        require(ssdName(0).equals("Second"), "SAVE by name uses the first empty sector");
+        command("new");
+        command("10 load \"Hello\"");
+        contains(command("run"), "OK");
+        require(java.util.Arrays.equals(program(), small), "LOAD by name from a running program");
+        ok("load \"Second\"");
+        contains(command("run"), "Second");
+        command("20 print \"Again\"");
+        ok("save \"Second\"");
+        require(ssdByte(1, 0) == 0xff, "SAVE by name must replace the existing file");
+        command("new");
+        ok("load \"Second\"");
+        contains(command("run"), "Second\nAgain");
+
+        command("new");
+        for (int line = 1; line <= 40; line++) {
+            command(line + " print \"" + String.valueOf((char) ('a' + line % 26)).repeat(100) + "\"");
+        }
+        int[] big = program();
+        require(big.length > 3840 && big.length < 7680, "Two-sector test program");
+        ok("save 20,\"Big\"");
+        require(ssdByte(20, 8) == 21 && ssdByte(21, 0) == 0 && ssdByte(21, 8) == 0xff, "Sector chain");
+        require(ssdWord(21, 2) == word("TXTTAB") + 3840 && ssdWord(21, 4) == big.length - 3840,
+            "Continuation header");
+        require(ssdWord(21, 6) == ssdWord(20, 6) && ssdName(21).equals("Big"), "Continuation checksum and name");
+        contains(command("save 21,\"Part\""), "?SECTOR IN USE ERROR");
+        contains(command("save 63,\"Big\""), "?SSD FULL ERROR");
+        command("new");
+        ok("load \"Big\"");
+        require(java.util.Arrays.equals(program(), big), "Multi-sector LOAD");
+        contains(command("run"), "o".repeat(32));
+
+        command("new");
+        command("10 print 1");
+        ok("save \"Big\"");
+        require(ssdByte(20, 8) == 0xff && ssdByte(21, 0) == 0xff, "Shorter SAVE must erase leftover sectors");
+
+        command("new");
+        for (int line = 1; line <= 36; line++) {
+            command(line + " print \"" + "e".repeat(line <= 34 ? 100 : 57) + "\"");
+        }
+        int[] even = program();
+        require(even.length == 3840, "Exact-sector test program");
+        ok("save \"Even\"");
+        require(ssdWord(1, 4) == 3841 && ssdByte(1, 8) == 2 && ssdWord(2, 4) == 1,
+            "Exact-sector files get a one-byte second sector");
+        command("new");
+        ok("load \"Even\"");
+        require(java.util.Arrays.equals(program(), even), "Exact-sector LOAD");
+
+        contains(command("load 9"), "?FILE NOT FOUND ERROR");
+        contains(command("load \"Nope\""), "?FILE NOT FOUND ERROR");
+        contains(command("load 64"), "?FC ERROR");
+        contains(command("save 1,\"\""), "?FC ERROR");
+        contains(command("save \"" + "n".repeat(17) + "\""), "?LS ERROR");
+        contains(command("load 5 x"), "?SN ERROR");
+        ssd[30 * 4096] = 0;
+        ssd[30 * 4096 + 1] = 0;
+        contains(command("save 30,\"Prg\""), "?SECTOR IN USE ERROR");
+        contains(command("load 30"), "?BAD FILE ERROR");
+        ssd[5 * 4096 + 0x105] ^= 1;
+        contains(command("load 5"), "?BAD FILE ERROR");
+        require(java.util.Arrays.equals(program(), even), "A bad file must not replace the program");
+        contains(command("print 6*7"), " 42 ");
+    }
+
     private void run() {
         until(() -> cpu.getPC() == address("mon_loop"), "Monitor boot");
         type("l\n");
@@ -260,6 +376,8 @@ public class KiTBasicTest {
         contains(output.substring(start), "?KEY BUFFER FULL");
         contains(command("print 6*7"), " 42 ");
 
+        saveLoad();
+
         key(KeyEvent.VK_ESCAPE, false);
         until(() -> cpu.getPC() == address("mon_loop"), "Escape to monitor");
         type("g 1000\n");
@@ -269,6 +387,7 @@ public class KiTBasicTest {
         System.out.println("PASS: monitor serial load, startup, keyboard, video, arithmetic,");
         System.out.println("strings, arrays, functions, LIST/RUN, DATA/READ, INPUT/GET, editing,");
         System.out.println("line limits, scrolling, garbage collection, heap/stack exhaustion, Escape/CONT,");
+        System.out.println("SSD SAVE/LOAD by sector and name, multi-sector files, SSD errors,");
         System.out.println("monitor return, and cold restart.");
         System.out.printf("BASIC RAM: $%04x-$5fff (%d bytes before program terminator).%n",
             address("RAMLOC"), 0x6000 - address("RAMLOC"));
