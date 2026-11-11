@@ -157,11 +157,14 @@ done:
 /*
 Load the file in the current sector into RAM
 Clears carry bit if successful, set carry bit if unsuccessful
+Leaves the file's first sector selected, so its header can be read afterward
 */
 load_file: {
     pha
     phy
     phx
+    lda zp.ssd_sector                                       // remember the file's first sector
+    pha
 
 load_sector:
     lda START_ADDR
@@ -211,6 +214,10 @@ check_if_done:
 no_next_sector:
     clc
 load_done:
+    pla                                                     // restore the first sector (preserving carry)
+    php
+    jsr set_sector
+    plp
     plx
     ply
     pla
