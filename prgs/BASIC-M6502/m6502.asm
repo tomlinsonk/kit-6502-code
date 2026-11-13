@@ -933,6 +933,8 @@ file_size: .word 0
 file_left: .word 0
 file_end: .word 0
 file_sum: .word 0
+file_src: .word 0
+file_addr: .word 0
 workspace_end:
 // DISPATCH TABLES, RESERVED WORDS, AND ERROR TEXTS.
 
@@ -6386,99 +6388,20 @@ SAVE:
 	lda VARTAB
 	sbc TXTTAB
 	sta file_size
-	sta file_left
 	lda VARTAB+1
 	sbc TXTTAB+1
 	sta file_size+1
-	sta file_left+1
-	stz file_count
-!count:
-	inc file_count
-	lda file_left+1
-	cmp #SSD_DATA_PAGES
-	bcc !counted+
-	bne !more+
-	lda file_left
-	bne !more+
-	// Pad sizes that exactly fill sectors; the monitor's loader
-	// reads one page past them.
-	INCW(file_size)
-	inc file_count
-	bra !counted+
-!more:
-	sec
-	lda file_left+1
-	sbc #SSD_DATA_PAGES
-	sta file_left+1
-	bra !count-
-!counted:
-	jsr SSD_SUM_RAM
-	lda file_sector
-	bpl !check+
-	jsr SSD_FIND
-	bcc !found+
-	jsr SSD_FIND_FREE
-	bra !check+
-!found:
-	sta file_sector
-!check:
-	clc
-	lda file_sector
-	adc file_count
-	cmp #SSD_SECTORS+1
-	bcc !fits+
-	jmp SSD_FULL
-!fits:
-	jsr SSD_OLD_CHAIN
-	lda file_old_count
-	beq !free_check+
-	ldx file_sector
-	beq !free_check+
-	dex
-	txa
-	jsr ssd.set_sector
-	inx
-	lda ssd.START_ADDR
-	bne !free_check+
-	cpx ssd.next_sector_addr
-	bne !free_check+
-	jmp SSD_IN_USE
-!free_check:
-	ldx file_old_count
-!free_loop:
-	cpx file_count
-	bcs !write+
-	txa
-	clc
-	adc file_sector
-	jsr ssd.set_sector
-	lda ssd.START_ADDR
-	JEQ(SSD_IN_USE)
-	inx
-	bra !free_loop-
-!write:
-	jsr SSD_WRITE
-	ldx file_count
-!erase:
-	cpx file_old_count
-	bcs !done+
-	txa
-	clc
-	adc file_sector
-	jsr ssd.set_sector
-	jsr ssd.erase_sector
-	inx
-	bra !erase-
-!done:
-	lda file_sector
-	jmp ssd.set_sector
+	LDWD(TXTTAB)
+	STWD(file_src)
+	STWD(file_addr)
+	jmp ksf.SSD_SAVE
 
 LOAD:
 	jsr FRMEVL
 	bit VALTYP
 	bpl !sector+
 	jsr SSD_NAME
-	jsr SSD_FIND
+	jsr ksf.SSD_FIND
 	bcc !found+
 	jmp SSD_NOT_FOUND
 !found:
@@ -6591,85 +6514,6 @@ SSD_NAME:
 !done:
 	rts
 
-// Find the first sector of the data file named file_name.
-// Returns C clear and the sector in A, or C set if none matches.
-SSD_FIND:
-	lda #$ff
-	sta file_prev
-	ldx #0
-!sector:
-	txa
-	jsr ssd.set_sector
-	ldy #$ff
-	lda ssd.START_ADDR
-	bne !next+
-	cpx file_prev
-	beq !link+
-	lda ssd.file_type_addr
-	cmp #ssd.DATA
-	bne !link+
-	ldy file_name_len
-	lda ssd.file_name_addr,y
-	bne !link+
-!compare:
-	dey
-	bmi !found+
-	lda ssd.file_name_addr,y
-	cmp file_name,y
-	beq !compare-
-!link:
-	ldy ssd.next_sector_addr
-!next:
-	sty file_prev
-	inx
-	cpx #SSD_SECTORS
-	bcc !sector-
-	rts
-!found:
-	txa
-	clc
-	rts
-
-// Set file_sector to the first run of file_count empty sectors.
-SSD_FIND_FREE:
-	ldx #0
-!start:
-	stx file_sector
-	ldy file_count
-!check:
-	cpx #SSD_SECTORS
-	bcs SSD_FULL
-	txa
-	jsr ssd.set_sector
-	inx
-	lda ssd.START_ADDR
-	beq !start-
-	dey
-	bne !check-
-	rts
-
-// Count the data sectors chained from file_sector.
-SSD_OLD_CHAIN:
-	ldx file_sector
-	ldy #0
-!sector:
-	txa
-	jsr ssd.set_sector
-	lda ssd.START_ADDR
-	bne !done+
-	lda ssd.file_type_addr
-	cmp #ssd.DATA
-	bne !done+
-	iny
-	inx
-	cpx #SSD_SECTORS
-	bcs !done+
-	cpx ssd.next_sector_addr
-	beq !sector-
-!done:
-	sty file_old_count
-	rts
-
 SSD_FULL:
 	LDWDI(SSD_FULL_TEXT)
 	bra SSD_ERROR
@@ -6691,120 +6535,6 @@ SSD_ERROR:
 	pla
 	jsr STROUT
 	jmp TYPERR
-
-// Write file_size bytes from TXTTAB, one KSF header per sector.
-SSD_WRITE:
-	LDWD(TXTTAB)
-	STWD(zp.ssd_read_addr)
-	lda file_size
-	sta file_left
-	lda file_size+1
-	sta file_left+1
-	lda file_sector
-	sta file_current
-!sector:
-	lda file_current
-	jsr ssd.set_sector
-	jsr ssd.erase_sector
-	LDWDI(ssd.START_ADDR)
-	STWD(zp.ssd_write_addr)
-	lda #0
-	jsr SSD_PUT
-	lda #ssd.DATA
-	jsr SSD_PUT
-	lda zp.ssd_read_addr
-	jsr SSD_PUT
-	lda zp.ssd_read_addr+1
-	jsr SSD_PUT
-	lda file_left
-	jsr SSD_PUT
-	lda file_left+1
-	jsr SSD_PUT
-	lda file_sum
-	jsr SSD_PUT
-	lda file_sum+1
-	jsr SSD_PUT
-	lda file_left+1
-	cmp #SSD_DATA_PAGES
-	bcc !name+
-	bne !link+
-	lda file_left
-	beq !name+
-!link:
-	ldx file_current
-	inx
-	txa
-	jsr SSD_PUT
-!name:
-	lda #<ssd.file_name_addr
-	sta zp.ssd_write_addr
-	ldx #0
-!name_char:
-	lda file_name,x
-	jsr SSD_PUT
-	inx
-	cpx #SSD_NAME_LEN+1
-	bcc !name_char-
-	LDWDI(ssd.file_start_addr)
-	STWD(zp.ssd_write_addr)
-	ldx #SSD_DATA_PAGES
-!byte:
-	lda file_left
-	ora file_left+1
-	beq !done+
-	lda (zp.ssd_read_addr)
-	jsr ssd.write_byte
-	INCW(zp.ssd_read_addr)
-	DECW(file_left)
-	inc zp.ssd_write_addr
-	bne !byte-
-	inc zp.ssd_write_addr+1
-	dex
-	bne !byte-
-	lda file_left
-	ora file_left+1
-	beq !done+
-	inc file_current
-	jmp !sector-
-!done:
-	rts
-
-SSD_PUT:
-	jsr ssd.write_byte
-	inc zp.ssd_write_addr
-	rts
-
-// Checksum file_size bytes from TXTTAB into file_sum.
-SSD_SUM_RAM:
-	stz file_sum
-	stz file_sum+1
-	LDWD(TXTTAB)
-	STWD(INDEX)
-	lda file_size
-	sta file_left
-	lda file_size+1
-	sta file_left+1
-!byte:
-	lda file_left
-	ora file_left+1
-	beq !done+
-	lda (INDEX)
-	jsr SSD_ADD_SUM
-	INCW(INDEX)
-	DECW(file_left)
-	bra !byte-
-!done:
-	rts
-
-// Fletcher checksum used by the monitor's serial loader.
-SSD_ADD_SUM:
-	clc
-	adc file_sum
-	sta file_sum
-	clc
-	adc file_sum+1
-	sta file_sum+1
-	rts
 
 // Checksum the file chained from file_sector, copying it to TXTTAB
 // if file_copy is set. Returns C set if the chain is broken.
@@ -6842,7 +6572,7 @@ SSD_READ:
 	sta (INDEX)
 	INCW(INDEX)
 !sum:
-	jsr SSD_ADD_SUM
+	jsr ksf.SSD_ADD_SUM
 	DECW(file_left)
 	inc zp.ssd_read_addr
 	bne !byte-
@@ -6906,6 +6636,304 @@ SSD_CHECK_PROGRAM:
 	sec
 	rts
 
+
+// Saving code shared by BASIC and upload.prg. Each instance uses the
+// file_* workspace variables and jumps to full or in_use on errors.
+.macro SSD_SAVE_CODE(full, in_use) {
+// Save file_size bytes from file_src as data file file_name, with
+// header load address file_addr. file_sector is the first sector,
+// or $ff to replace the file named file_name or use free sectors.
+SSD_SAVE:
+	lda file_size
+	sta file_left
+	lda file_size+1
+	sta file_left+1
+	stz file_count
+!count:
+	inc file_count
+	lda file_left+1
+	cmp #SSD_DATA_PAGES
+	bcc !counted+
+	bne !more+
+	lda file_left
+	bne !more+
+	// Pad sizes that exactly fill sectors; the monitor's loader
+	// reads one page past them.
+	INCW(file_size)
+	inc file_count
+	bra !counted+
+!more:
+	sec
+	lda file_left+1
+	sbc #SSD_DATA_PAGES
+	sta file_left+1
+	bra !count-
+!counted:
+	jsr SSD_SUM
+	lda file_sector
+	bpl !check+
+	jsr SSD_FIND
+	bcc !found+
+	jsr SSD_FIND_FREE
+	bra !check+
+!found:
+	sta file_sector
+!check:
+	clc
+	lda file_sector
+	adc file_count
+	cmp #SSD_SECTORS+1
+	bcc !fits+
+	jmp full
+!fits:
+	jsr SSD_OLD_CHAIN
+	lda file_old_count
+	beq !free_check+
+	ldx file_sector
+	beq !free_check+
+	dex
+	txa
+	jsr ssd.set_sector
+	inx
+	lda ssd.START_ADDR
+	bne !free_check+
+	cpx ssd.next_sector_addr
+	bne !free_check+
+	jmp in_use
+!free_check:
+	ldx file_old_count
+!free_loop:
+	cpx file_count
+	bcs !write+
+	txa
+	clc
+	adc file_sector
+	jsr ssd.set_sector
+	lda ssd.START_ADDR
+	bne !free+
+	jmp in_use
+!free:
+	inx
+	bra !free_loop-
+!write:
+	jsr SSD_WRITE
+	ldx file_count
+!erase:
+	cpx file_old_count
+	bcs !done+
+	txa
+	clc
+	adc file_sector
+	jsr ssd.set_sector
+	jsr ssd.erase_sector
+	inx
+	bra !erase-
+!done:
+	lda file_sector
+	jmp ssd.set_sector
+
+// Find the first sector of the data file named file_name.
+// Returns C clear and the sector in A, or C set if none matches.
+SSD_FIND:
+	lda #$ff
+	sta file_prev
+	ldx #0
+!sector:
+	txa
+	jsr ssd.set_sector
+	ldy #$ff
+	lda ssd.START_ADDR
+	bne !next+
+	cpx file_prev
+	beq !link+
+	lda ssd.file_type_addr
+	cmp #ssd.DATA
+	bne !link+
+	ldy file_name_len
+	lda ssd.file_name_addr,y
+	bne !link+
+!compare:
+	dey
+	bmi !found+
+	lda ssd.file_name_addr,y
+	cmp file_name,y
+	beq !compare-
+!link:
+	ldy ssd.next_sector_addr
+!next:
+	sty file_prev
+	inx
+	cpx #SSD_SECTORS
+	bcc !sector-
+	rts
+!found:
+	txa
+	clc
+	rts
+
+// Set file_sector to the first run of file_count empty sectors.
+SSD_FIND_FREE:
+	ldx #0
+!start:
+	stx file_sector
+	ldy file_count
+!check:
+	cpx #SSD_SECTORS
+	bcs !full+
+	txa
+	jsr ssd.set_sector
+	inx
+	lda ssd.START_ADDR
+	beq !start-
+	dey
+	bne !check-
+	rts
+!full:
+	jmp full
+
+// Count the data sectors chained from file_sector.
+SSD_OLD_CHAIN:
+	ldx file_sector
+	ldy #0
+!sector:
+	txa
+	jsr ssd.set_sector
+	lda ssd.START_ADDR
+	bne !done+
+	lda ssd.file_type_addr
+	cmp #ssd.DATA
+	bne !done+
+	iny
+	inx
+	cpx #SSD_SECTORS
+	bcs !done+
+	cpx ssd.next_sector_addr
+	beq !sector-
+!done:
+	sty file_old_count
+	rts
+
+// Write file_size bytes from file_src, one KSF header per sector.
+SSD_WRITE:
+	LDWD(file_src)
+	STWD(zp.ssd_read_addr)
+	lda file_size
+	sta file_left
+	lda file_size+1
+	sta file_left+1
+	lda file_sector
+	sta file_current
+!sector:
+	lda file_current
+	jsr ssd.set_sector
+	jsr ssd.erase_sector
+	LDWDI(ssd.START_ADDR)
+	STWD(zp.ssd_write_addr)
+	lda #0
+	jsr SSD_PUT
+	lda #ssd.DATA
+	jsr SSD_PUT
+	lda file_addr
+	jsr SSD_PUT
+	lda file_addr+1
+	jsr SSD_PUT
+	lda file_left
+	jsr SSD_PUT
+	lda file_left+1
+	jsr SSD_PUT
+	lda file_sum
+	jsr SSD_PUT
+	lda file_sum+1
+	jsr SSD_PUT
+	lda file_left+1
+	cmp #SSD_DATA_PAGES
+	bcc !name+
+	bne !link+
+	lda file_left
+	beq !name+
+!link:
+	ldx file_current
+	inx
+	txa
+	jsr SSD_PUT
+!name:
+	lda #<ssd.file_name_addr
+	sta zp.ssd_write_addr
+	ldx #0
+!name_char:
+	lda file_name,x
+	jsr SSD_PUT
+	inx
+	cpx #SSD_NAME_LEN+1
+	bcc !name_char-
+	LDWDI(ssd.file_start_addr)
+	STWD(zp.ssd_write_addr)
+	ldx #SSD_DATA_PAGES
+!byte:
+	lda file_left
+	ora file_left+1
+	beq !done+
+	lda (zp.ssd_read_addr)
+	jsr ssd.write_byte
+	INCW(zp.ssd_read_addr)
+	DECW(file_left)
+	inc zp.ssd_write_addr
+	bne !byte-
+	inc zp.ssd_write_addr+1
+	dex
+	bne !byte-
+	lda file_left
+	ora file_left+1
+	beq !done+
+	inc file_current
+	clc
+	lda file_addr+1
+	adc #SSD_DATA_PAGES
+	sta file_addr+1
+	jmp !sector-
+!done:
+	rts
+
+SSD_PUT:
+	jsr ssd.write_byte
+	inc zp.ssd_write_addr
+	rts
+
+// Checksum file_size bytes from file_src into file_sum.
+SSD_SUM:
+	stz file_sum
+	stz file_sum+1
+	LDWD(file_src)
+	STWD(zp.ssd_read_addr)
+	lda file_size
+	sta file_left
+	lda file_size+1
+	sta file_left+1
+!byte:
+	lda file_left
+	ora file_left+1
+	beq !done+
+	lda (zp.ssd_read_addr)
+	jsr SSD_ADD_SUM
+	INCW(zp.ssd_read_addr)
+	DECW(file_left)
+	bra !byte-
+!done:
+	rts
+
+// Fletcher checksum used by the monitor's serial loader.
+SSD_ADD_SUM:
+	clc
+	adc file_sum
+	sta file_sum
+	clc
+	adc file_sum+1
+	sta file_sum+1
+	rts
+}
+
+ksf: SSD_SAVE_CODE(SSD_FULL, SSD_IN_USE)
+
 SSD_FULL_TEXT:
 	.text "SSD FULL"
 	.byte 0
@@ -6928,3 +6956,5 @@ program_end:
 .assert "Cold-start clear loops must fit their signed counters", workspace_end-workspace_start <= 128 && basic_zp_end-basic_zp_start <= 128, true
 .assert "PRG must start at its cold entry point", cold_start == ROMLOC, true
 .assert "BASIC program storage must be below VRAM", RAMLOC < MEMTOP && MEMTOP == vid.VRAM_START, true
+
+#import "upload.asm"

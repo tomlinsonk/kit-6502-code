@@ -16,6 +16,8 @@ public class KiTBasicTest {
     private final int[] ssd;
     private final Map<String, Integer> symbols = new HashMap<>();
     private final StringBuilder output = new StringBuilder();
+    private final UART uart;
+    private int[] big;
 
     private static Object field(KiT kit, String name) throws Exception {
         Field field = KiT.class.getDeclaredField(name);
@@ -38,7 +40,8 @@ public class KiTBasicTest {
         Field data = ssdDevice.getClass().getDeclaredField("data");
         data.setAccessible(true);
         ssd = (int[]) data.get(ssdDevice);
-        ((UART) field(kit, "uart")).loadPrg(program.toFile());
+        uart = (UART) field(kit, "uart");
+        uart.loadPrg(program.toFile());
     }
 
     private int address(String name) {
@@ -218,7 +221,7 @@ public class KiTBasicTest {
         for (int line = 1; line <= 40; line++) {
             command(line + " print \"" + String.valueOf((char) ('a' + line % 26)).repeat(100) + "\"");
         }
-        int[] big = program();
+        big = program();
         require(big.length > 3840 && big.length < 7680, "Two-sector test program");
         ok("save 20,\"Big\"");
         require(ssdByte(20, 8) == 21 && ssdByte(21, 0) == 0 && ssdByte(21, 8) == 0xff, "Sector chain");
@@ -266,7 +269,54 @@ public class KiTBasicTest {
         contains(command("print 6*7"), " 42 ");
     }
 
-    private void run() {
+    // Load an upload prg from the monitor, run it, and return its message.
+    private String upload(String prg) {
+        uart.loadPrg(Path.of(prg).toFile());
+        type("l\n");
+        until(() -> cpu.getPC() == address("get_yn_loop"), "Upload PRG load");
+        type("r");
+        until(() -> cpu.getPC() == address("mon_loop"), "Upload return to monitor");
+        return screen().split("\n")[14].trim();
+    }
+
+    private void uploads(String[] args) throws Exception {
+        java.util.Arrays.fill(ssd, 0xff);
+        ssd[0] = 0;
+        ssd[1] = 0;
+
+        command("new");
+        for (String line : Files.readAllLines(Path.of(args[1]))) {
+            if (!line.isBlank()) command(line);
+        }
+        int[] typed = program();
+
+        key(KeyEvent.VK_ESCAPE, false);
+        until(() -> cpu.getPC() == address("mon_loop"), "Escape to monitor for uploads");
+        String message = upload(args[2]);
+        require(message.equals("saved to sector 1"), "Upload to the first free sector: " + message);
+        require(ssdByte(1, 1) == 0x20 && ssdWord(1, 2) == word("TXTTAB") && ssdWord(1, 4) == typed.length
+            && ssdName(1).equals("upload-test"), "Uploaded file header");
+        message = upload(args[3]);
+        require(message.equals("saved to sector 40"), "Upload to a chosen sector: " + message);
+        require(ssdByte(40, 8) == 41 && ssdWord(41, 2) == word("TXTTAB") + 3840 && ssdName(41).equals("Big"),
+            "Uploaded multi-sector file");
+        message = upload(args[4]);
+        require(message.equals("error: sector in use"), "Upload to an in-use sector: " + message);
+        message = upload(args[2]);
+        require(message.equals("saved to sector 1") && ssdByte(2, 0) == 0xff,
+            "Upload replaces the file with the same name: " + message);
+
+        type("g 1000\n");
+        ok("load \"upload-test\"");
+        require(java.util.Arrays.equals(program(), typed), "Uploaded program must match the typed one");
+        contains(command("run"), "first\nHello, World from bas2prg\n 1  2  3 \nPRINTa:b\n"
+            + "after data\nrem data to 11 \nSeventy\nreplaced\n");
+        ok("load \"Big\"");
+        require(java.util.Arrays.equals(program(), big), "Uploaded multi-sector program");
+        contains(command("run"), "o".repeat(32));
+    }
+
+    private void run(String[] args) throws Exception {
         until(() -> cpu.getPC() == address("mon_loop"), "Monitor boot");
         type("l\n");
         until(() -> cpu.getPC() == address("get_yn_loop"), "Serial PRG load");
@@ -377,6 +427,7 @@ public class KiTBasicTest {
         contains(command("print 6*7"), " 42 ");
 
         saveLoad();
+        uploads(args);
 
         key(KeyEvent.VK_ESCAPE, false);
         until(() -> cpu.getPC() == address("mon_loop"), "Escape to monitor");
@@ -388,12 +439,13 @@ public class KiTBasicTest {
         System.out.println("strings, arrays, functions, LIST/RUN, DATA/READ, INPUT/GET, editing,");
         System.out.println("line limits, scrolling, garbage collection, heap/stack exhaustion, Escape/CONT,");
         System.out.println("SSD SAVE/LOAD by sector and name, multi-sector files, SSD errors,");
+        System.out.println("bas2prg uploads,");
         System.out.println("monitor return, and cold restart.");
         System.out.printf("BASIC RAM: $%04x-$5fff (%d bytes before program terminator).%n",
             address("RAMLOC"), 0x6000 - address("RAMLOC"));
     }
 
     public static void main(String[] args) throws Exception {
-        new KiTBasicTest(Path.of(args[0])).run();
+        new KiTBasicTest(Path.of(args[0])).run(args);
     }
 }
