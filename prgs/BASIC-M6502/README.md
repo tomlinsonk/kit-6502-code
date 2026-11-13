@@ -112,6 +112,26 @@ start BASIC and `LOAD "hello"`.
 | `error: sector in use` | A needed sector holds another file |
 | `error: ssd full` | Not enough sectors after the starting sector |
 
+## Examples
+
+`examples/` has programs to upload with `bas2prg.py`:
+
+| Program | What it does |
+| --- | --- |
+| `mandel.bas` | Draws the Mandelbrot set in colour (about a minute) |
+| `lissajous.bas` | Draws Lissajous curves in 64x32 pixel graphics; press a key for the next curve |
+| `music.bas` | Plays a tune on the SID and draws it as a scrolling piano roll |
+
+```sh
+python3 bas2prg.py examples/mandel.bas
+```
+
+They draw by `POKE`ing video memory at `24576` (`$6000`), 32 columns by
+16 rows. A value of 128 + 16 × colour + pixels shows a 2x2 block of
+pixels in one of 8 colours; the pixel bits are 8 (top left), 4 (top
+right), 2 (bottom left), and 1 (bottom right). The SID's registers start
+at `32256` (`$7E00`).
+
 ## Memory and entry points
 
 | Address | Use |
@@ -148,5 +168,6 @@ Tests use the emulator's host-key mappings, the real monitor loader,
 PS/2 keyboard interrupts, and video memory. They cover BASIC statements,
 punctuation input, line editing and limits, scrolling,
 string garbage collection, heap/stack exhaustion, Escape/CONT, SSD
-`SAVE`/`LOAD`, `bas2prg.py` uploads, monitor return, and cold restart. They do not change the
+`SAVE`/`LOAD`, `bas2prg.py` uploads, the examples, monitor return, and
+cold restart. They do not change the
 emulator's `ssd.bin`.

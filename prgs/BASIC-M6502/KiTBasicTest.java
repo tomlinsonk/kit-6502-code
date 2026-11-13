@@ -316,6 +316,54 @@ public class KiTBasicTest {
         contains(command("run"), "o".repeat(32));
     }
 
+    // Run until the program polls for a key with GET, or BASIC prompts.
+    private void waitForKey(String description) {
+        int polls = 0;
+        for (long i = 0; i < 1_000_000_000L; i++) {
+            if (cpu.getPC() == address("KIT_GET_KEY") && ++polls > 2000) return;
+            step();
+        }
+        throw new AssertionError(description + " timed out\n" + output);
+    }
+
+    private int countCells(java.util.function.IntPredicate test) {
+        int count = 0;
+        for (int i = 0; i < 512; i++) if (test.test(bus.debugRead(0x6000 + i))) count++;
+        return count;
+    }
+
+    private void runExample(String name) {
+        prompt();
+        type("load \"" + name + "\"\nrun\n");
+        waitForKey(name);
+    }
+
+    private void examples(String[] args) {
+        key(KeyEvent.VK_ESCAPE, false);
+        until(() -> cpu.getPC() == address("mon_loop"), "Escape to monitor for examples");
+        for (int i = 5; i < 8; i++) contains(upload(args[i]), "saved to sector");
+        type("g 1000\n");
+        int start = output.length();
+
+        runExample("mandel");
+        require(bus.debugRead(0x6000 + 7 * 32 + 24) == 128, "Mandelbrot set is black");
+        require(countCells(v -> v > 143) > 200, "Mandelbrot colours");
+        type(" ");
+
+        runExample("lissajous");
+        for (int figure = 0; figure < 5; figure++) {
+            require(countCells(v -> v > 128 && v < 256) > 40, "Lissajous figure " + figure);
+            type(" ");
+            waitForKey("lissajous");
+        }
+
+        runExample("music");
+        contains(output.substring(start).replaceAll("\\s", ""), "runE4E4F4G4G4F4E4D4C4C4D4E4E4D4D4");
+        require(countCells(v -> v > 128) > 20, "Music piano roll");
+        require(!output.substring(start).contains("?"), "Examples must run without errors:\n"
+            + output.substring(start));
+    }
+
     private void run(String[] args) throws Exception {
         until(() -> cpu.getPC() == address("mon_loop"), "Monitor boot");
         type("l\n");
@@ -428,6 +476,7 @@ public class KiTBasicTest {
 
         saveLoad();
         uploads(args);
+        examples(args);
 
         key(KeyEvent.VK_ESCAPE, false);
         until(() -> cpu.getPC() == address("mon_loop"), "Escape to monitor");
@@ -439,7 +488,7 @@ public class KiTBasicTest {
         System.out.println("strings, arrays, functions, LIST/RUN, DATA/READ, INPUT/GET, editing,");
         System.out.println("line limits, scrolling, garbage collection, heap/stack exhaustion, Escape/CONT,");
         System.out.println("SSD SAVE/LOAD by sector and name, multi-sector files, SSD errors,");
-        System.out.println("bas2prg uploads,");
+        System.out.println("bas2prg uploads, example programs,");
         System.out.println("monitor return, and cold restart.");
         System.out.printf("BASIC RAM: $%04x-$5fff (%d bytes before program terminator).%n",
             address("RAMLOC"), 0x6000 - address("RAMLOC"));
