@@ -4,4 +4,4 @@
 **/*.bin
 **/.DS_Store
 .idea
-KickAss.jar
+KickAss.jar__pycache__/
