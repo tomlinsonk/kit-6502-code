@@ -6,6 +6,7 @@
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "zp.lib"
 #import "macros.lib"
 
@@ -91,7 +92,7 @@ Using 7A2X thus works with both
 Initialize the UART
 Uses 8n1 mode with no FIFO and 4800 baud @ 1MHz clock
 */
-init:
+_init:
 	pha
 
 	lda #DLAB
@@ -126,7 +127,7 @@ init:
 Initialize the UART
 Uses 8n1 mode with no FIFO and 38400 baud @ 1.8...MHz clock
 */
-init_38400:
+_init_38400:
     pha
 
     lda #DLAB
@@ -155,7 +156,7 @@ init_38400:
 Initialize the UART
 Uses 8n1 mode with no FIFO and 4800 baud @ 1MHz clock
 */
-init_9600:
+_init_9600:
 	pha
 
 	lda #DLAB
@@ -189,7 +190,7 @@ Read a byte from the UART into A. Blocks until a byte is available.
 If there was an error, set the C flag.
 C flag clear means a byte was successfully read into A.
 */
-read_byte:
+_read_byte:
 
 	lda LSR 												// check the line status register
 	and #(OVERRUN_ERR | PARITY_ERR | FRAMING_ERR | BREAK_INT) // check for errors
@@ -202,7 +203,7 @@ no_err:
 	lda LSR 												// reload the line status register
 
 	and #DATA_READY
-	beq read_byte 											// if data ready is not set, loop
+	beq _read_byte 											// if data ready is not set, loop
 	
 	lda RBR 												// otherwise, we have data! Load it.
 	clc 													// clear the carry flag to indicate no error
@@ -216,7 +217,7 @@ no_err:
 Write a byte in A to the UART.
 Blocks until the UART is ready to send (transmitter holding register is empty)
 */
-write_byte:
+_write_byte:
 	pha
 wait_for_thr_empty:
 	lda LSR
@@ -226,6 +227,21 @@ wait_for_thr_empty:
 	pla
 	sta THR 												// send the byte
 	rts
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var uart_api_resume = *
+* = api.UART "uart API"
+init:       jmp _init
+init_38400: jmp _init_38400
+init_9600:  jmp _init_9600
+read_byte:  jmp _read_byte
+write_byte: jmp _write_byte
+api_check("uart", api.UART, 16)
+* = uart_api_resume
 
 #endif
 

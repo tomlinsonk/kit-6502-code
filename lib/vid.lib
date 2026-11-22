@@ -6,6 +6,7 @@
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "via.lib"
 #import "zp.lib"
 #import "macros.lib"
@@ -47,7 +48,7 @@
 /* --------------------------------------------------------------------------------------- 
 Initialize the display
 */
-init:
+_init:
 #if PCB
     lda #$ff
     sta MODE_REG_DIR
@@ -63,7 +64,7 @@ init:
 /* --------------------------------------------------------------------------------------- 
 Initialize the blinking cursor
 */
-init_cursor:
+_init_cursor:
 	lda via.IER
 	ora #(via.INT_ENABLE | via.TIMER1_INT)
 	sta via.IER 									// enable timer 1 interrupts
@@ -83,7 +84,7 @@ init_cursor:
 /* --------------------------------------------------------------------------------------- 
 Blank the screen in text mode
 */
-blank_screen:
+_blank_screen:
 	pha
 	phx
 
@@ -107,7 +108,7 @@ fill_2nd_half:
 write the ascii char in A to the address in the video pointer
 writes upper case as inverted, assuming data bit 6 in text mode is INV
 */
-write_ascii:
+_write_ascii:
     pha
     phy
 
@@ -142,7 +143,7 @@ video_write:
 write the null-terminated ASCII string at address in zp.B, zp.C 
 to the address in the vid pointer. Increments vid_ptr
 */
-write_string: {
+_write_string: {
     phy
     pha
     ldy #0
@@ -166,7 +167,7 @@ done:
 write the number in A to the address in the video pointer
 also increment vid ptr twice
 */
-write_hex:                                        
+_write_hex:                                        
     pha                                             // stash number on stack
     pha
 
@@ -217,14 +218,14 @@ write_lo_nibble:
 /* --------------------------------------------------------------------------------------- 
 increment the video and pointer, wrapping from 512 to 0
 */
-inc_vid_ptr:
+_inc_vid_ptr:
     inc_vid_ptr()
     rts
 
 /* --------------------------------------------------------------------------------------- 
 decrement the video pointer, wrapping from 0 to 512
 */
-dec_vid_ptr:
+_dec_vid_ptr:
     dec_vid_ptr()
     rts
 
@@ -232,7 +233,7 @@ dec_vid_ptr:
 /* --------------------------------------------------------------------------------------- 
 Shift every row up 1
 */
-shift_up_1:
+_shift_up_1:
     shift_vid_up(1, 0)
     rts
 
@@ -240,7 +241,7 @@ shift_up_1:
 /* --------------------------------------------------------------------------------------- 
 Shift every row up 1 and clear the bottom row
 */
-shift_up_1_clear_bottom:
+_shift_up_1_clear_bottom:
     jsr shift_up_1
     fill_vid_row(15, ' ')
     set_vid_ptr(15, 0)
@@ -249,7 +250,7 @@ shift_up_1_clear_bottom:
 /* --------------------------------------------------------------------------------------- 
 The the vid pointer to the beginning of row in Y (0...15)
 */
-set_row:
+_set_row:
     lda vram_row_starts.lo,y
     sta zp.vid_ptr
     lda vram_row_starts.hi,y
@@ -258,6 +259,27 @@ set_row:
     
 vram_row_starts:
     .lohifill 16,vid.VRAM_START+i*32
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var vid_api_resume = *
+* = api.VID "vid API"
+init:                    jmp _init
+init_cursor:             jmp _init_cursor
+blank_screen:            jmp _blank_screen
+write_ascii:             jmp _write_ascii
+write_string:            jmp _write_string
+write_hex:               jmp _write_hex
+inc_vid_ptr:             jmp _inc_vid_ptr
+dec_vid_ptr:             jmp _dec_vid_ptr
+shift_up_1:              jmp _shift_up_1
+shift_up_1_clear_bottom: jmp _shift_up_1_clear_bottom
+set_row:                 jmp _set_row
+api_check("vid", api.VID, 32)
+* = vid_api_resume
 
 #endif
 

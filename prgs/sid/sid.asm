@@ -12,7 +12,7 @@
 #import "../../lib/uart.lib"
 #import "../../lib/sid.lib"
 
-#import "video_mon.sym"
+#import "kit_os.sym"
 
 
 

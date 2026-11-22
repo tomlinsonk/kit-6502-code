@@ -6,6 +6,7 @@
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "via.lib"
 #import "zp.lib"
 #import "macros.lib"
@@ -36,7 +37,7 @@ Color Graphics One.
 Draw the color in A (bottom two bits: 00 = green, 01 = yellow, 10 = blue, 11 = red) to the coordinates
 in X and Y (X: column 0 - 63, Y: row 0 - 63)
 */
-write_pixel: {
+_write_pixel: {
     phx
     phy
     pha
@@ -131,7 +132,7 @@ save_pixel:
 Color Graphics One.
 Read the pixel in coordinates X and Y (X: column 0 - 63, Y: row 0 - 63) into the bottom two bits of A
 */
-read_pixel: {
+_read_pixel: {
     phx
     phy
 
@@ -206,6 +207,18 @@ return:
     rts
 }
 
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var vid_cg1_api_resume = *
+* = api.VID_CG1 "vid_cg1 API"
+write_pixel: jmp _write_pixel
+read_pixel:  jmp _read_pixel
+api_check("vid_cg1", api.VID_CG1, 16)
+* = vid_cg1_api_resume
 
 #endif
 

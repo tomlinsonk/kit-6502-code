@@ -1,45 +1,37 @@
-.cpu _65c02
-.encoding "ascii"
 .filenamespace mini_asm
 
 /*
-Mini assembler for the KiT: a one-line-at-a-time 65C02 assembler in the style of
-the Apple II mini-assembler. Type "addr: mnemonic operand" (the address is optional),
+Line assembler (a command): a one-line-at-a-time 65C02 assembler in the style of the
+Apple II mini-assembler. Type "addr: mnemonic operand" (the address is optional),
 and the bytes are written to memory and the address advances.
 See README.md for the syntax.
+
+Memory: pc and a validity marker in mini_asm_ram, per-run buffers in mini_asm_scratch,
+zp.D-E as a pointer. Code is assembled only into RAM $0000-$5fff.
 */
-
-#define PCB
-
-#import "video_mon.sym"
-
-#define MACROS_ONLY
-#import "../../lib/macros.lib"
-#import "../../lib/vid.lib"
-
 
 .const LINE_MAX = 26                                // chars that fit after the "xxxx: " prompt
 .const NAME_MAX = 16                                // KSF file name length
 .const MAX_SAVE = $0eff                             // largest file that fits in one SSD sector
 .const LIST_COL = 15                                // listing column for the normalized instruction
 
-// Addressing modes
-.const IMP = 0                                      // implied
-.const ACC = 1                                      // accumulator
-.const IMM = 2                                      // #$12
-.const ZP  = 3                                      // $12
-.const ZPX = 4                                      // $12,x
-.const ZPY = 5                                      // $12,y
-.const IZX = 6                                      // ($12,x)
-.const IZY = 7                                      // ($12),y
-.const IZP = 8                                      // ($12)
-.const ABS = 9                                      // $1234
-.const ABX = 10                                     // $1234,x
-.const ABY = 11                                     // $1234,y
-.const IND = 12                                     // ($1234)
-.const IAX = 13                                     // ($1234,x)
-.const REL = 14                                     // branch target
-.const ZPR = 15                                     // $12,target (bbr/bbs)
+// Addressing modes (see opcodes.asm)
+.const IMP = OP_IMP
+.const ACC = OP_ACC
+.const IMM = OP_IMM
+.const ZP  = OP_ZP
+.const ZPX = OP_ZPX
+.const ZPY = OP_ZPY
+.const IZX = OP_IZX
+.const IZY = OP_IZY
+.const IZP = OP_IZP
+.const ABS = OP_ABS
+.const ABX = OP_ABX
+.const ABY = OP_ABY
+.const IND = OP_IND
+.const IAX = OP_IAX
+.const REL = OP_REL
+.const ZPR = OP_ZPR
 .const NONE = $ff
 
 // Listing format flags per mode
@@ -48,101 +40,40 @@ See README.md for the syntax.
 .const F_WORD = 4                                   // 16-bit value
 
 
-// Opcode table, built at assembly time.
-// op_mnem[opcode] = mnemonic index, op_mode[opcode] = addressing mode ($ff if undefined)
-.var names = List()
-.var op_mnem_list = List()
-.var op_mode_list = List()
-.for (var i = 0; i < 256; i++) {
-    .eval op_mnem_list.add(NONE)
-    .eval op_mode_list.add(NONE)
-}
-
-.function def(name, modes) {
-    .var index = names.size()
-    .eval names.add(name)
-    .for (var i = 0; i < modes.size(); i += 2) {
-        .eval op_mode_list.set(modes.get(i + 1), modes.get(i))
-        .eval op_mnem_list.set(modes.get(i + 1), index)
-    }
-    .return index
-}
-
-// adc, and, cmp, eor, lda, ora, sbc share a layout relative to the (zp,x) opcode
-.function alu(name, base) {
-    .return def(name, List().add(IMM, base + $08, ZP, base + $04, ZPX, base + $14, ABS, base + $0c,
-        ABX, base + $1c, ABY, base + $18, IZX, base, IZY, base + $10, IZP, base + $11))
-}
-
-// asl, lsr, rol, ror share a layout relative to the zp opcode
-.function shift(name, base) {
-    .return def(name, List().add(ACC, base + $04, ZP, base, ZPX, base + $10, ABS, base + $08, ABX, base + $18))
-}
-
-.eval alu("adc", $61)
-.eval alu("and", $21)
-.eval alu("cmp", $c1)
-.eval alu("eor", $41)
-.eval alu("lda", $a1)
-.eval alu("ora", $01)
-.eval alu("sbc", $e1)
-.eval def("sta", List().add(ZP, $85, ZPX, $95, ABS, $8d, ABX, $9d, ABY, $99, IZX, $81, IZY, $91, IZP, $92))
-.eval shift("asl", $06)
-.eval shift("lsr", $46)
-.eval shift("rol", $26)
-.eval shift("ror", $66)
-.eval def("dec", List().add(ACC, $3a, ZP, $c6, ZPX, $d6, ABS, $ce, ABX, $de))
-.eval def("inc", List().add(ACC, $1a, ZP, $e6, ZPX, $f6, ABS, $ee, ABX, $fe))
-.eval def("bit", List().add(IMM, $89, ZP, $24, ZPX, $34, ABS, $2c, ABX, $3c))
-.eval def("cpx", List().add(IMM, $e0, ZP, $e4, ABS, $ec))
-.eval def("cpy", List().add(IMM, $c0, ZP, $c4, ABS, $cc))
-.eval def("ldx", List().add(IMM, $a2, ZP, $a6, ZPY, $b6, ABS, $ae, ABY, $be))
-.eval def("ldy", List().add(IMM, $a0, ZP, $a4, ZPX, $b4, ABS, $ac, ABX, $bc))
-.eval def("stx", List().add(ZP, $86, ZPY, $96, ABS, $8e))
-.eval def("sty", List().add(ZP, $84, ZPX, $94, ABS, $8c))
-.eval def("stz", List().add(ZP, $64, ZPX, $74, ABS, $9c, ABX, $9e))
-.eval def("trb", List().add(ZP, $14, ABS, $1c))
-.eval def("tsb", List().add(ZP, $04, ABS, $0c))
-.eval def("jmp", List().add(ABS, $4c, IND, $6c, IAX, $7c))
-.eval def("jsr", List().add(ABS, $20))
-
-.var branches = List().add("bcc", $90, "bcs", $b0, "beq", $f0, "bmi", $30, "bne", $d0,
-    "bpl", $10, "bra", $80, "bvc", $50, "bvs", $70)
-.for (var i = 0; i < branches.size(); i += 2) {
-    .eval def(branches.get(i), List().add(REL, branches.get(i + 1)))
-}
-
-.var implied = List().add("brk", $00, "clc", $18, "cld", $d8, "cli", $58, "clv", $b8,
-    "dex", $ca, "dey", $88, "inx", $e8, "iny", $c8, "nop", $ea,
-    "pha", $48, "php", $08, "phx", $da, "phy", $5a,
-    "pla", $68, "plp", $28, "plx", $fa, "ply", $7a,
-    "rti", $40, "rts", $60, "sec", $38, "sed", $f8, "sei", $78, "stp", $db,
-    "tax", $aa, "tay", $a8, "tsx", $ba, "txa", $8a, "txs", $9a, "tya", $98, "wai", $cb)
-.for (var i = 0; i < implied.size(); i += 2) {
-    .eval def(implied.get(i), List().add(IMP, implied.get(i + 1)))
-}
-
-// Bit instructions take a bit number 0-7 (rmb3, bbs7, ...), added to the opcode as bit << 4.
-// Only the bit 0 opcode is in the table.
-.const FIRST_BIT_MNEM = names.size()
-.eval def("rmb", List().add(ZP, $07))
-.eval def("smb", List().add(ZP, $87))
-.eval def("bbr", List().add(ZPR, $0f))
-.eval def("bbs", List().add(ZPR, $8f))
-.const NUM_MNEMS = names.size()
 
 
-.label ptr = zp.math0                               // 2 bytes: general pointer
+.const RAM_END = $6000                              // code is assembled into $0000 up to here
+.const FIRST_PC = $1000
+.const MAGIC = $a5                                  // marker: pc in mini_asm_ram is valid
 
+.label ptr = zp.D                                   // 2 bytes: general pointer
 
-.segment Code [outPrg="mini-asm.prg", start=$5000]
-asm_start:
-    jmp init
+// Kept between runs
+.label pc = mini_asm_ram                            // 2 bytes: address of the next instruction
+.label magic = mini_asm_ram + 2                     // 2 bytes: MAGIC, ~MAGIC when pc is valid
 
 
 /* ---------------------------------------------------------------------------------------
-Start (or restart) the assembler. Keeps the current address.
+Start the assembler. Carry set: start at zp.mon_addr. Carry clear: continue where it left
+off, or at $1000 the first time.
 */
+start:
+    bcs set_pc
+    lda magic
+    cmp #MAGIC
+    bne first_pc
+    lda magic+1
+    cmp #(~MAGIC & $ff)
+    beq init
+first_pc:
+    mov2 #FIRST_PC : zp.mon_addr
+set_pc:
+    mov2 zp.mon_addr : pc
+    lda #MAGIC
+    sta magic
+    lda #(~MAGIC & $ff)
+    sta magic+1
+
 init:
     cld
     sei
@@ -177,9 +108,7 @@ prompt_loop:
     jmp prompt_loop
 
 exit_to_monitor:
-    brk                                             // monitor x (or g 5000) comes back here
-    .byte 0
-    jmp prompt_loop
+    jmp app_exit                                    // the stack is as it was at start
 
 
 /* ---------------------------------------------------------------------------------------
@@ -306,7 +235,7 @@ err_mnemonic:   error(msg_mnemonic)
 err_operand:    error(msg_operand)
 err_mode:       error(msg_mode)
 err_range:      error(msg_range)
-err_overlap:    error(msg_overlap)
+err_not_ram:    error(msg_not_ram)
 err_directive:  error(msg_directive)
 err_sector:     error(msg_sector)
 err_size:       error(msg_size)
@@ -315,7 +244,7 @@ msg_mnemonic:   .text "bad mnemonic" ; .byte 0
 msg_operand:    .text "bad operand" ; .byte 0
 msg_mode:       .text "bad address mode" ; .byte 0
 msg_range:      .text "out of range" ; .byte 0
-msg_overlap:    .text "overlaps mini-asm" ; .byte 0
+msg_not_ram:    .text "not in ram 0000-5fff" ; .byte 0
 msg_directive:  .text "bad directive" ; .byte 0
 msg_sector:     .text "bad sector" ; .byte 0
 msg_size:       .text "bad size" ; .byte 0
@@ -349,17 +278,19 @@ assemble_line:
 find_mnem:
     ldx tmp
     lda lc,x
-    cmp names1,y
+    cmp mnem_text,y
     bne next_mnem
     lda lc+1,x
-    cmp names2,y
+    cmp mnem_text+1,y
     bne next_mnem
     lda lc+2,x
-    cmp names3,y
+    cmp mnem_text+2,y
     beq found_mnem
 next_mnem:
     iny
-    cpy #NUM_MNEMS
+    iny
+    iny
+    cpy #MNEM_UNKNOWN                               // stop before "???"
     bne find_mnem
     jmp err_mnemonic
 
@@ -385,7 +316,7 @@ no_bit:
     jmp err_mnemonic
 !:
     lda mnem                                        // bit number given iff it's a bit instruction
-    cmp #FIRST_BIT_MNEM
+    cmp #MNEM_FIRST_BIT
     lda #0
     rol
     cmp has_bit
@@ -410,7 +341,7 @@ no_bit:
     sta obuf
 !:
     ldy mode
-    lda mode_size,y
+    lda mode_len,y
     sta osize
 
     cpy #REL
@@ -903,30 +834,20 @@ dt_loop:
 Write the osize bytes in obuf at pc, list them, and advance pc
 */
 emit:
-    mov2 pc : ptr                                   // refuse to overwrite the assembler
-    ldy osize
-em_check:
-    lda ptr+1
-    cmp #>asm_start
-    bcc em_ok
-    bne !+
-    lda ptr
-    cmp #<asm_start
-    bcc em_ok
-!:  lda ptr+1
-    cmp #>asm_end
-    bcc em_overlap
-    bne em_ok
-    lda ptr
-    cmp #<asm_end
-    bcc em_overlap
-em_ok:
-    inc2 ptr
-    dey
-    bne em_check
-    jmp em_write
-em_overlap:
-    jmp err_overlap
+    lda pc                                          // pc + osize must not pass RAM_END
+    clc
+    adc osize
+    tay
+    lda pc+1
+    adc #0
+    bcs em_not_ram                                  // wrapped past $ffff
+    cmp #>RAM_END
+    bcc em_write
+    bne em_not_ram
+    cpy #<RAM_END
+    beq em_write
+em_not_ram:
+    jmp err_not_ram
 
 em_write:
     mov2 pc : ptr
@@ -987,11 +908,11 @@ ll_bytes_done:
     rts
 !:  set_vid_ptr(15, LIST_COL)
     ldx mnem
-    lda names1,x
+    lda mnem_text,x
     jsr putc
-    lda names2,x
+    lda mnem_text+1,x
     jsr putc
-    lda names3,x
+    lda mnem_text+2,x
     jsr putc
     lda has_bit
     beq !+
@@ -1220,9 +1141,6 @@ dec_count:
 /* ---------------------------------------------------------------------------------------
 Tables
 */
-mode_size:
-    .byte 1, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 2, 3
-
 mode_flags:
     .byte 0, 0, F_IMM, 0, 0, 0, F_PAREN, F_PAREN, F_PAREN
     .byte F_WORD, F_WORD, F_WORD, F_PAREN | F_WORD, F_PAREN | F_WORD, F_WORD, 0
@@ -1243,17 +1161,14 @@ sfx_y:          .text ",y" ; .byte 0
 mode_suffix:
     .byte 0, 0, 0, 0, sx, sy, sxc, scy, sc, 0, sx, sy, sc, sxc, 0, 0
 
-names1: .fill NUM_MNEMS, names.get(i).charAt(0)
-names2: .fill NUM_MNEMS, names.get(i).charAt(1)
-names3: .fill NUM_MNEMS, names.get(i).charAt(2)
-op_mnem: .fill 256, op_mnem_list.get(i)
-op_mode: .fill 256, op_mode_list.get(i)
+
+
 
 
 /* ---------------------------------------------------------------------------------------
-Variables
+Variables for one run, in mini_asm_scratch
 */
-pc:         .word $1000                             // address of the next instruction
+.segment MiniAsmScratch [start=mini_asm_scratch, max=mini_asm_scratch+$1ff, virtual]
 line_pc:    .word 0
 error_sp:   .byte 0
 len:        .byte 0
@@ -1279,4 +1194,4 @@ save_size:  .word 0
 count:      .word 0
 sum1:       .byte 0
 sum2:       .byte 0
-asm_end:
+.segment Default

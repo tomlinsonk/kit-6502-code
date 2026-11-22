@@ -6,7 +6,7 @@
 
 #if !MACROS_ONLY
 
-
+#import "api.lib"
 #import "zp.lib"
 #import "via.lib"
 #import "macros.lib"
@@ -72,7 +72,7 @@
 /* --------------------------------------------------------------------------------------- 
 Initialize the keyboard interface
 */
-init:
+_init:
 	pha
 
     stz zp.kb_flags
@@ -101,7 +101,7 @@ Return the ASCII code for regular characters and tab, back space, enter = line f
 For extended keypresses (e.g., arrow keys), set A to the 7-bit scancode with bit 7 set.
 Sets negative flag for extended keypress.
 */
-get_press:
+_get_press:
     phx
     phy
 
@@ -205,6 +205,18 @@ keymap_shifted:
     .text @"??????\$08??1?47???"                    // 60-6F
     .text @"0.2568\$1b?\$8b+3-*9??"                 // 70-7F
  
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var kb_api_resume = *
+* = api.KB "kb API"
+init:      jmp _init
+get_press: jmp _get_press
+api_check("kb", api.KB, 16)
+* = kb_api_resume
+
 #endif
 
 

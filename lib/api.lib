@@ -1,0 +1,32 @@
+#importonce
+.filenamespace api
+
+/*
+Addresses of the public entry points in the kit-os ROM.
+
+Each library puts a table of jmp instructions at its address below, so its public
+routines (for example vid.write_ascii) stay at the same address when kit-os is
+rebuilt. Programs assembled against kit_os.sym keep working with newer ROMs.
+
+Only add entries at the end of a table. Never reorder or remove them.
+*/
+
+.label VID = $fd00                                  // 32 entries
+.label KB = $fd60                                   // 16 entries
+.label SSD = $fd90                                  // 16 entries
+.label SID = $fdc0                                  // 16 entries
+.label MATH = $fdf0                                 // 16 entries
+.label UART = $fe20                                 // 16 entries
+.label VID_CG1 = $fe50                              // 16 entries
+.label VID_CG3 = $fe80                              // 16 entries
+.label VID_RG1 = $feb0                              // 16 entries
+.label WIFI = $fee0                                 // 16 entries
+.label KIT_OS = $ff10                               // up to the CPU vectors at $fffa
+
+
+/* ---------------------------------------------------------------------------------------
+Check that a table starting at base with room for slots entries hasn't overflowed
+*/
+.macro @api_check(name, base, slots) {
+    .assert name + " API table fits", * <= base + slots * 3, true
+}

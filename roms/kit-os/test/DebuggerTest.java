@@ -5,6 +5,8 @@ import java.io.PrintStream;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
@@ -30,25 +32,27 @@ public class DebuggerTest {
     private void loadSymbols(Path file) throws Exception {
         Pattern namespace = Pattern.compile("^\\.namespace (\\w+) \\{");
         Pattern label = Pattern.compile("\\.label ([\\w.]+)=\\$([0-9a-f]+)");
-        String prefix = "";
+        Deque<String> scopes = new ArrayDeque<>();      // namespace prefix of each open block
         for (String line : Files.readAllLines(file)) {
-            Matcher n = namespace.matcher(line.trim());
+            String text = line.trim();
+            String prefix = scopes.isEmpty() ? "" : scopes.peek();
+            Matcher n = namespace.matcher(text);
             if (n.find()) {
-                prefix = n.group(1) + ".";
+                scopes.push(n.group(1) + ".");
                 continue;
             }
-            if (line.trim().equals("}")) {
-                prefix = "";
+            if (text.equals("}")) {
+                scopes.pop();
                 continue;
             }
             Matcher l = label.matcher(line);
             if (l.find()) symbols.put(prefix + l.group(1), Integer.parseInt(l.group(2), 16));
+            if (text.endsWith("{")) scopes.push(prefix);
         }
     }
 
-    private DebuggerTest(Path program, Path monitorSymbols) throws Exception {
+    private DebuggerTest(Path monitorSymbols) throws Exception {
         loadSymbols(monitorSymbols);
-        loadSymbols(program.resolveSibling("debugger.sym"));
         PrintStream out = System.out;
         System.setOut(new PrintStream(new OutputStream() {
             public void write(int b) {
@@ -62,7 +66,6 @@ public class DebuggerTest {
         via1 = (VIA) field(kit, KiT.class, "via1");
         via2 = (VIA) field(kit, KiT.class, "via2");
         ssd = (int[]) field(field(kit, KiT.class, "ssd"), SSD.class, "data");
-        ((UART) field(kit, KiT.class, "uart")).loadPrg(program.toFile());
     }
 
     // ---------------------------------------------------------------- emulator helpers
@@ -97,6 +100,16 @@ public class DebuggerTest {
         int cycles = (int) (cpu.getCycleCount() - before);
         via1.updateCycleCount(cycles);
         via2.updateCycleCount(cycles);
+    }
+
+    private void setS(int value) {
+        try {
+            Field field = CPU.class.getDeclaredField("S");
+            field.setAccessible(true);
+            field.setInt(cpu, value & 0xff);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private void steps(int count) {
@@ -154,6 +167,25 @@ public class DebuggerTest {
         waitForDebugger = true;
     }
 
+    // Run a monitor command and wait for the prompt
+    private void monitorCommand(String text) {
+        monitor(text + "\n");
+        until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "monitor command " + text);
+    }
+
+    // Start the debugger with b from the monitor prompt
+    private void debug(String args) {
+        monitor("b" + args + "\n");
+        idle();
+        require(cpu.getPC() == sym("key_loop"), "debugger started");
+    }
+
+    // Leave the debugger with esc
+    private void leave() {
+        press(PS2.getScanCode(KeyEvent.VK_ESCAPE));
+        until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "monitor after esc");
+    }
+
     private void arrow(int keyCode) {
         int code = PS2.getScanCode(keyCode);
         scan(0xe0);
@@ -165,11 +197,12 @@ public class DebuggerTest {
     }
 
     private void type(String text) {
-        String plain = "0123456789.\t\b\n";
+        String plain = "0123456789.\t\b\n -";
         int[] codes = {
             KeyEvent.VK_0, KeyEvent.VK_1, KeyEvent.VK_2, KeyEvent.VK_3, KeyEvent.VK_4,
             KeyEvent.VK_5, KeyEvent.VK_6, KeyEvent.VK_7, KeyEvent.VK_8, KeyEvent.VK_9,
-            KeyEvent.VK_PERIOD, KeyEvent.VK_TAB, KeyEvent.VK_BACK_SPACE, KeyEvent.VK_ENTER
+            KeyEvent.VK_PERIOD, KeyEvent.VK_TAB, KeyEvent.VK_BACK_SPACE, KeyEvent.VK_ENTER,
+            KeyEvent.VK_SPACE, KeyEvent.VK_MINUS
         };
         for (char c : text.toCharArray()) {
             int index;
@@ -243,16 +276,24 @@ public class DebuggerTest {
 
     // ---------------------------------------------------------------- disassembler
 
-    // Disassemble the bytes at $1000 through the program's own formatter
+    // Disassemble the bytes at $1000 through the debugger's own formatter: call code_line
+    // with a return address that points at a jmp-to-self in RAM
     private String disassemble(int... bytes) {
-        require(cpu.getPC() == sym("key_loop"), "Debugger must be idle to call test_line");
+        require(cpu.getPC() == sym("key_loop"), "Debugger must be idle to call code_line");
+        final int spin = 0x5ff0;
         poke(0x1000, bytes);
+        poke(spin, 0x4c, spin & 0xff, spin >> 8);
         poke(sym("dpc"), 0x00, 0x10);
-        cpu.setPC(sym("test_line"));
-        until(() -> cpu.getPC() == sym("test_done"), "test_line");
+        int s = cpu.getS();
+        poke(0x100 + s, (spin - 1) >> 8);
+        poke(0x100 + ((s - 1) & 0xff), (spin - 1) & 0xff);
+        setS(s - 2);
+        cpu.setPC(sym("code_line"));
+        until(() -> cpu.getPC() == spin, "code_line");
         StringBuilder text = new StringBuilder();
         int line = sym("line");
         for (int i = 0; i < 32; i++) text.append((char) (peek(line + i) & 0x7f));
+        setS(s);
         cpu.setPC(sym("key_loop"));
         return text.toString().replaceAll(" +$", "");
     }
@@ -393,7 +434,7 @@ public class DebuggerTest {
         stepAndCheck(0x1050);                       // jmp ($1040)
 
         stepAndCheck(0x1052);                       // sta $05 goes to the user's zero page
-        equal(peek(sym("user_zp") + 5), 0x32, "user zp write");
+        equal(peek(sym("zp_reg_stash") + 5), 0x32, "user zp write");
         equal(peek(0x05), liveZp5, "debugger zp untouched");
         stepAndCheck(0x1055);                       // sta $6021 goes to the user's screen
         equal(peek(sym("user_screen") + 0x21), 0x32, "user screen write");
@@ -486,7 +527,10 @@ public class DebuggerTest {
         type("b");
         jump(0x0100);
         type("b");
-        contains(status(), "bp must be in $0200-$47ff");
+        contains(status(), "bp must be in $0300-$5fff");
+        jump(0x6000);
+        type("b");
+        contains(status(), "bp must be in $0300-$5fff");
 
         setPc(0x1100);
         type("g");
@@ -525,7 +569,7 @@ public class DebuggerTest {
         equal(word("reg_pc"), 0x1201, "stopped at brk");
         contains(status(), "brk");
         equal(peek(0x1e) | peek(0x1f) << 8, sym("irq"), "monitor irq handler restored");
-        equal(peek(sym("user_zp") + 0x1e) | peek(sym("user_zp") + 0x1f) << 8, sym("irq"),
+        equal(peek(sym("irq_addr_stash")) | peek(sym("irq_addr_stash") + 1) << 8, sym("irq"),
             "user irq handler restored");
         System.out.println("running OK");
     }
@@ -561,8 +605,13 @@ public class DebuggerTest {
         int live = peek(0x07);
         jump(0x0007);
         type("77");
-        equal(peek(sym("user_zp") + 7), 0x77, "zero page edit goes to the user's copy");
+        equal(peek(sym("zp_reg_stash") + 7), 0x77, "zero page edit goes to the user's copy");
         equal(peek(0x07), live, "debugger zero page untouched");
+
+        jump(0x001e);
+        int irq = sym("irq");
+        contains(row(2), String.format("0018 %02x %02x %02x %02x %02x %02x %02x %02x",
+            peek(0x18), peek(0x19), peek(0x1a), peek(0x1b), peek(0x1c), peek(0x1d), irq & 0xff, irq >> 8));
 
         jump(0x6010);
         type("01");
@@ -583,7 +632,7 @@ public class DebuggerTest {
         int number = 0x3e;
         type("k3e");
         contains(row(1), "ssd 3e");
-        equal(peek(sym("user_zp") + 0x42), number, "user sector");
+        equal(peek(sym("zp.ssd_sector")), number, "user sector");
         int[] before = sector(number);
         int[] neighbour = sector(number + 1);
         int offset = 0x123;
@@ -601,7 +650,10 @@ public class DebuggerTest {
 
         jump(0x8000 + offset);                      // setting the bit again needs an erase
         console.reset();
+        int[] userScreen = new int[512];
+        for (int i = 0; i < 512; i++) userScreen[i] = peek(sym("user_screen") + i);
         type(String.format("%02x", old));
+        for (int i = 0; i < 512; i++) equal(peek(sym("user_screen") + i), userScreen[i], "user screen kept");
         require(console.toString().contains("ERASE"), "0->1 patch erases the sector");
         after = sector(number);
         for (int i = 0; i < 4096; i++) {
@@ -624,24 +676,149 @@ public class DebuggerTest {
         type("0");
         contains(row(0), "pc ");
 
-        press(PS2.getScanCode(KeyEvent.VK_ESCAPE));
-        until(() -> cpu.getPC() == sym("mon_loop"), "monitor after esc");
-        monitor("x\n");
-        idle();
-        require(cpu.getPC() == sym("key_loop"), "back in the debugger");
-        contains(row(0), "pc ");
+        poke(0x3000,
+            0xa5, 0x07,             // 3000 lda $07
+            0x8d, 0x01, 0x31,       // 3002 sta $3101
+            0xa9, 0x5a,             // 3005 lda #$5a
+            0x8d, 0x00, 0x31,       // 3007 sta $3100
+            0x00, 0xea);            // 300a brk
+        poke(0x3100, 0, 0);
+        setPc(0x3000);
+        type("ra11");
+        type("rx22");
+        type("ry33");
+        type("rp21");
+        jump(0x3002);
+        type("b");
+        type("\t");
+        jump(0x3010);
+
+        leave();                                    // esc: the user's registers go on the monitor's stack
+        require(row(0).isBlank(), "esc clears the screen");
+        contains(row(15), ">");
+        monitorCommand("s");
+        contains(row(14), "pc3000 p21 a11 x22 y33 sf9");   // the monitor shows its own S: the user's S - 6
         System.out.println("monitor OK");
+    }
+
+    // ---------------------------------------------------------------- sessions
+
+    private void testResume() {
+        monitorCommand("u - - 44");                 // the monitor changes a register
+        contains(row(14), "a44");
+        debug("");
+        equal(var("view"), 1, "view kept");
+        equal(word("cur"), 0x3010, "cursor kept");
+        contains(row(0), "pc 3000 a 44 x 22 y 33 s ff");
+        contains(row(1), "p 21");
+        type("\t");
+        jump(0x3002);
+        contains(row(2), " * 3002 8d 01 31");
+
+        leave();                                    // x runs the program from the debugger's pc
+        monitor("x\n");
+        until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "brk back to the monitor");
+        equal(peek(0x3101), 0x77, "the program sees the user's zero page");
+        equal(peek(0x3100), 0x5a, "the program ran");
+        debug("");                                  // b continues from the program's brk
+        equal(word("reg_pc"), 0x300c, "pc after the program's brk");
+        equal(var("reg_a"), 0x5a, "a from the program");
+        equal(var("reg_s"), 0xff, "s after brk");
+        equal(var("view"), 0, "code view after the pc moved");
+        equal(word("cur"), 0x300c, "cursor at the new pc");
+        contains(row(2), ">  300c");
+        jump(0x3002);
+        contains(row(2), " * 3002");
+        System.out.println("resume OK");
+    }
+
+    private void testOverwrite() {
+        int bpOn = sym("bp_on");
+        poke(0x4000,
+            0xa2, 0x00,             // 4000 ldx #0
+            0xa9, 0xaa,             // 4002 lda #$aa
+            0x9d, 0x00, 0x6e,       // 4004 sta $6e00,x: fill debugger_scratch like 6 KB graphics
+            0x9d, 0x00, 0x6f,       // 4007 sta $6f00,x
+            0x9d, 0x00, 0x70,       // 400a sta $7000,x
+            0x9d, 0x00, 0x71,       // 400d sta $7100,x
+            0xe8,                   // 4010 inx
+            0xd0, 0xf1,             // 4011 bne $4004
+            0xea,                   // 4013 nop
+            0x8d, bpOn & 0xff, bpOn >> 8,   // 4014 sta bp_on
+            0xea);                  // 4017 nop
+        jump(0x4013);
+        type("b");
+        jump(0x4017);
+        type("b");
+        setPc(0x4000);
+        type("g");
+        equal(word("reg_pc"), 0x4013, "breakpoint after the program filled the debugger's memory");
+        contains(status(), "breakpoint");
+        equal(peek(0x4013), 0xea, "breakpoint removed");
+        equal(peek(0x4017), 0xea, "other breakpoint removed");
+        contains(row(2), ">* 4013 ea       nop");
+        contains(row(4), " * 4017 ea       nop");
+
+        stepAndCheck(0x4014);
+        stepAndCheck(0x4017);                       // the step wrote into the breakpoint table
+        contains(status(), "debugger memory overwritten");
+        equal(word("cur"), 0x4017, "cursor at the pc");
+        for (int i = 0; i <= 8; i++) equal(peek(bpOn + i), 0, "breakpoints cleared");
+        stepAndCheck(0x4018);
+        System.out.println("overwritten memory OK");
+    }
+
+    private void testUnfinishedRun() {
+        int irq = sym("irq");
+        poke(0x4100,
+            0xa9, irq & 0xff,       // 4100 lda #<irq: the program takes back the irq vector
+            0x85, 0x1e,             // 4102 sta $1e
+            0xa9, irq >> 8,         // 4104 lda #>irq
+            0x85, 0x1f,             // 4106 sta $1f
+            0x00, 0xea,             // 4108 brk: goes to the monitor, not the debugger
+            0xea);                  // 410a nop
+        jump(0x410a);
+        type("b");
+        setPc(0x4100);
+        press(PS2.getScanCode(KeyEvent.VK_G));
+        until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "brk to the monitor during g");
+        equal(peek(0x410a), 0x00, "breakpoint still in memory");
+        debug("");
+        equal(peek(0x410a), 0xea, "b removes the breakpoints of an unfinished run");
+        equal(word("reg_pc"), 0x410a, "pc from the monitor");
+        contains(row(2), ">* 410a ea       nop");
+        System.out.println("unfinished run OK");
+    }
+
+    private void testNewSession() {
+        leave();
+        debug(" 2000");
+        equal(word("reg_pc"), 0x2000, "b with an address");
+        contains(row(0), "pc 2000 a 00 x 00 y 00 s ff");
+        contains(row(1), "p 20 ");
+        equal(var("view"), 0, "code view");
+        equal(word("cur"), 0x2000, "cursor at the pc");
+        for (int i = 0; i <= 8; i++) equal(peek(sym("bp_on") + i), 0, "no breakpoints");
+
+        jump(0x2010);
+        type("b");
+        leave();
+        poke(sym("user_screen") + 0x40, peek(sym("user_screen") + 0x40) ^ 0xff);
+        debug("");
+        equal(word("reg_pc"), 0x1000, "a lost session starts over at $1000");
+        contains(row(0), "pc 1000 a 00 x 00 y 00 s ff");
+        for (int i = 0; i <= 8; i++) equal(peek(sym("bp_on") + i), 0, "breakpoints of a lost session");
+        System.out.println("new session OK");
     }
 
     private void run() throws Exception {
         until(() -> cpu.getPC() == sym("mon_loop"), "Monitor boot");
-        monitor("l\n");
-        until(() -> cpu.getPC() == sym("get_yn_loop"), "Serial PRG load");
-        scan(PS2.getScanCode(KeyEvent.VK_R));      // the release arrives after the program starts
+        monitor("b");
+        scan(PS2.getScanCode(KeyEvent.VK_ENTER));  // the release arrives after the debugger starts
         until(() -> cpu.getPC() == sym("key_loop"), "Debugger start");
         scan(0xf0);
-        scan(PS2.getScanCode(KeyEvent.VK_R));
-        scan(PS2.getScanCode(KeyEvent.VK_ENTER));  // a stray key from the load must not break anything
+        scan(PS2.getScanCode(KeyEvent.VK_ENTER));
+        scan(PS2.getScanCode(KeyEvent.VK_ENTER));  // a stray key must not break anything
         scan(0xf0);
         scan(PS2.getScanCode(KeyEvent.VK_ENTER));
         idle();
@@ -659,14 +836,18 @@ public class DebuggerTest {
         testSsd();
         type("\t");
         testMonitor();
+        testResume();
+        testOverwrite();
+        testUnfinishedRun();
+        testNewSession();
         System.out.println("All debugger tests passed (" + checks + " checks)");
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 2) {
-            System.err.println("usage: DebuggerTest debugger.prg video_mon.sym");
+        if (args.length != 1) {
+            System.err.println("usage: DebuggerTest kit_os.sym");
             System.exit(2);
         }
-        new DebuggerTest(Path.of(args[0]), Path.of(args[1])).run();
+        new DebuggerTest(Path.of(args[0])).run();
     }
 }

@@ -9,14 +9,14 @@ Includes integer arrays and five-byte floating-point numbers.
 From this directory, build the monitor and BASIC:
 
 ```sh
-(cd ../../roms/video-mon && java -jar ../../KickAss.jar -libdir ../../lib -binfile video_mon.asm)
-java -jar ../../KickAss.jar -libdir ../../roms/video-mon m6502.asm
+(cd ../../roms/kit-os && java -jar ../../KickAss.jar -libdir ../../lib -binfile kit_os.asm)
+java -jar ../../KickAss.jar -libdir ../../roms/kit-os m6502.asm
 ```
 
 This writes `m6502.prg`, `m6502.sym`, and `upload.prg` (used by
 `bas2prg.py`). BASIC calls routines from the
 monitor's symbol file, so the KiT must run the matching
-`../../roms/video-mon/video_mon.bin`. Flash that ROM for hardware use;
+`../../roms/kit-os/kit_os.bin`. Flash that ROM for hardware use;
 kit-emu reads it directly.
 
 ## Run
@@ -66,7 +66,7 @@ LOAD 5
 - `LOAD` replaces the current program, clears variables, and returns to
   `OK`, including when used inside a program.
 - Names are 1-16 characters and case-sensitive. BASIC sector numbers are
-  decimal 0-63; the monitor's `d` and `e` commands use hex.
+  decimal 0-63; the monitor's `f` command uses hex.
 - Programs are saved as KSF data files (type `$20`), one header per sector.
   `SAVE` only overwrites empty sectors or a data file that starts at that
   sector, and erases sectors left over from a longer version.

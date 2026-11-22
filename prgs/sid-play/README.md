@@ -34,7 +34,7 @@ cp sidreloc-1.0/sidreloc /usr/local/bin/     # or pass --sidreloc PATH to sid2ki
 Build the player and save it to the SSD once:
 
 ```sh
-ka -libdir ../../roms/video-mon sid_play.asm
+ka -libdir ../../roms/kit-os sid_play.asm
 ```
 
 In the monitor, type `l`, then send the program:
@@ -43,7 +43,7 @@ In the monitor, type `l`, then send the program:
 python3 pcb_serial_send.py sid_play.prg
 ```
 
-Press `s`, pick a free sector, and name it (for example `sid play`).
+Press `s` and name it (for example `sid play`). The monitor saves it to the lowest free sectors and shows where, for example `saved to 06`.
 
 ## Adding a song
 
@@ -60,7 +60,7 @@ checked 9 subtunes for 3000 play calls each
 wizball.prg: "Wizball" by Martin Galway, 9 subtunes, $0f80-$3036, 8375 bytes (3 SSD sectors)
 ```
 
-Load and save `wizball.prg` the same way as the player. A song that needs more than one sector also fills the sectors after the one you pick (sectors 10, 11, and 12 for Wizball saved at 10), so make sure they're free. Use `d` in the monitor to see what's where.
+Load and save `wizball.prg` the same way as the player. Wizball takes 3 sectors. Use `f` in the monitor to see what's where.
 
 ## Playing
 

@@ -19,7 +19,7 @@
      heroes       theme again with a sawtooth lead
      stack climb  ...then back to the main theme
 
-   Assemble:  ka -libdir ../../roms/video-mon zero_page_heroes.asm
+   Assemble:  ka -libdir ../../roms/kit-os zero_page_heroes.asm
    Press any key to stop and return to the monitor.
    ========================================================================= */
 
@@ -33,7 +33,7 @@
 #import "../../lib/vid.lib"
 #import "../../lib/kb.lib"
 
-#import "video_mon.sym"
+#import "kit_os.sym"
 
 
 .label SID = $7e00

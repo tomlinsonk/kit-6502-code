@@ -4,7 +4,7 @@
 
 #define PCB
 
-#import "../../roms/video-mon/video_mon.sym"
+#import "../../roms/kit-os/kit_os.sym"
 
 #define MACROS_ONLY
 #import "../../lib/macros.lib"

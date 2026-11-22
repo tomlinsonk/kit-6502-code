@@ -2,7 +2,7 @@
 .cpu _65c02
 .encoding "ascii"
 
-#import "video_mon.sym"
+#import "kit_os.sym"
 #define MACROS_ONLY
 #import "../../lib/vid.lib"
 

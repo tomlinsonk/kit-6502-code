@@ -7,6 +7,7 @@
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "zp.lib"
 
 .label dividend = zp.math0 						    // two bytes
@@ -19,7 +20,7 @@ Divide two-byte number in dividend by two-byte number in divisor.
 Result goes in quotient, remainder in remainder.
 Overwrites dividend and divisor.
 */
-divide16: {                                                      
+_divide16: {                                                      
     pha
     phx
     phy
@@ -55,5 +56,16 @@ div_after_save:
     pla
     rts
 }
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var math_api_resume = *
+* = api.MATH "math API"
+divide16: jmp _divide16
+api_check("math", api.MATH, 16)
+* = math_api_resume
 
 #endif

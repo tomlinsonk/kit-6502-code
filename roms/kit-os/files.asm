@@ -1,33 +1,17 @@
-/* =========================================================================
-   SSD FILES
-   File manager for the KiT's SSD (KSF filesystem, see lib/ssd.lib).
+.filenamespace files
 
-   Lists every file once, however many sectors it spans, with a map of
-   used and free sectors. Runs, renames, deletes, and copies files.
+/*
+File manager for the SSD (f command), and saving loaded files to it (files.save).
 
-   Keys:  up/down pick   left/right or pgup/pgdn page   return run/view
-          r rename   d delete   c copy   esc quit
+The file manager lists every file once, however many sectors it spans, with a map of
+used and free sectors. Runs, renames, deletes, and copies files.
 
-   Assemble:  ka -libdir ../../roms/video-mon ssd_files.asm
+Keys:  up/down pick   left/right or pgup/pgdn page   enter run/view
+       n rename   d delete   c copy   esc back to the monitor
 
-   Memory:
-     $1000-$1fff   program
-     $2000-$2fff   sector tables, read from the headers at startup
-     $3000-$3fff   one-sector buffer for rename and copy
-   ========================================================================= */
-
-.cpu _65c02
-.encoding "ascii"
-.filenamespace ssdfiles
-
-#define PCB
-#define MACROS_ONLY
-#import "../../lib/macros.lib"
-#import "../../lib/vid.lib"
-#import "../../lib/kb.lib"
-
-#import "video_mon.sym"
-
+Memory: tables and variables in files_scratch (video RAM past the text screen).
+Rename and copy stream bytes between sectors, so they need no RAM buffer.
+*/
 
 .label SCREEN = $6000
 .label SSD = $8000                                  // header page of the selected sector
@@ -37,6 +21,7 @@
 .label SSD_NEXT = $8008
 .label SSD_VID_MODE = $8009
 .label SSD_NAME = $8010
+.label SSD_DATA = $8100
 .label SSD_END = $9000
 
 .const SECTORS = 64
@@ -45,8 +30,11 @@
 .const IMAGE = $10
 .const DATA = $20
 
-.const FOOTPRINT_START = $1000                      // images loading here would overwrite us
-.const FOOTPRINT_END = $4000
+.const IMAGE_START = $0300                          // images must load between here
+.const IMAGE_END = $7800                            // and the end of video RAM
+
+.const PATCH_NAME = $80                             // stream_sector: write new_name
+.const PATCH_NEXT = $40                             // stream_sector: write new_next
 
 // Screen layout
 .const TITLE_ROW = 0
@@ -72,6 +60,9 @@
 .label digit = zp.L
 .label started = zp.M
 .label col = zp.N
+.label from = zp.O                                  // stream_sector: source sector
+.label to = zp.P                                    //   and destination sector
+.label saved_sp = zp.Q                              // stack pointer on entry
 
 
 // Print a string at row, col
@@ -96,11 +87,17 @@
 }
 
 
-.segment Code [outPrg="ssd_files.prg", start=$1000]
+/*
+Open the file manager
+*/
 start:
-    stz vid.MODE_REG                                // text mode
+    tsx
+    stx saved_sp
+    set_vid_mode_text()
+    sei
     lda zp.kb_write_ptr                             // drop keys typed at the monitor
     sta zp.kb_read_ptr
+    cli
     stz sel
     stz top
     jsr scan
@@ -171,9 +168,9 @@ not_pg_down:
 
     cmp #kb.ASCII_ESC
     bne not_esc
-    jsr vid.blank_screen
-    brk                                             // back to the monitor
-    nop
+    ldx saved_sp
+    txs
+    jmp app_exit
 not_esc:
 
     ldx file_count                                  // the rest need a file
@@ -184,7 +181,7 @@ not_esc:
     jmp open_file
 not_enter:
 
-    cmp #'r'
+    cmp #'n'
     bne not_rename
     jmp rename_file
 not_rename:
@@ -465,6 +462,25 @@ chain_done:
     rts
 
 
+/*
+Lowest free sector in A, carry clear. Carry set if there is none.
+*/
+find_free:
+    ldx #0
+find_free_loop:
+    lda used,x
+    bne found_free_sector
+    inx
+    cpx #SECTORS
+    bne find_free_loop
+    sec
+    rts
+found_free_sector:
+    txa
+    clc
+    rts
+
+
 /* -------------------------------------------------------------------------
 Commands
 */
@@ -487,40 +503,36 @@ run_program:
     jsr ssd.set_sector
     jsr vid.blank_screen
     set_vid_ptr(0, 0)
-    ldx #(trampoline_end - trampoline - 1)          // the program may load over us,
-copy_trampoline:                                    // so load it from the bottom of the stack page
-    lda trampoline,x
-    sta $0100,x
-    dex
-    bpl copy_trampoline
-    jmp $0100
-
-trampoline:
+    ldx saved_sp                                    // run it like f XX does
+    txs
     jsr ssd.load_file
     jmp (SSD_LOAD)
-trampoline_end:
 
 show_image:
-    lda load_hi,x                                   // refuse images that would load over us
-    cmp #>FOOTPRINT_END
-    bcs image_ok
+    lda load_hi,x                                   // refuse images that would load over
+    cmp #>IMAGE_START                               // the system or past video RAM
+    bcc image_outside
     clc
     lda load_lo,x
     adc size_lo,x
     sta tmp
     lda load_hi,x
     adc size_hi,x
-    bcs image_overlaps
-    cmp #>FOOTPRINT_START
+    bcs image_outside
+    cmp #>IMAGE_END
     bcc image_ok
-    bne image_overlaps
+    bne image_outside
     lda tmp
     beq image_ok
-image_overlaps:
-    message("image would load over this prg")
+image_outside:
+    message("image would load outside ram")
     rts
 
 image_ok:
+    lda sel                                         // the image may load over the tables
+    pha
+    lda top
+    pha
     lda sel_head
     jsr ssd.set_sector
     lda SSD_VID_MODE
@@ -529,7 +541,12 @@ image_ok:
 wait_key:
     jsr kb.get_press
     beq wait_key
-    stz vid.MODE_REG
+    set_vid_mode_text()
+    pla
+    sta top
+    pla
+    sta sel
+    jsr scan
     jmp draw_screen
 
 
@@ -574,7 +591,8 @@ cancelled:
 
 
 /*
-r: rewrite every sector of the selected file with a new name
+n: rewrite every sector of the selected file with a new name. Each sector
+is copied to a free sector with the new name, erased, and copied back.
 */
 rename_file:
     jsr start_name_edit
@@ -593,18 +611,40 @@ same_name:
     jmp draw_help
 
 rename_changed:
+    jsr find_free
+    bcc have_spare
+    message("rename needs a free sector")
+    rts
+
+have_spare:
+    sta spare
     message("renaming...")
     jsr build_chain
-    ldx #0
+    stz chain_index
 rename_loop:
+    ldx chain_index
     lda chain,x
-    jsr read_sector
-    jsr set_buffer_name
+    sta from
+    lda spare
+    sta to
+    lda #PATCH_NAME
+    sta patch
+    jsr stream_sector                               // copy it to the spare with the new name
+    lda spare
+    sta from
+    ldx chain_index
     lda chain,x
-    jsr write_sector
-    inx
-    cpx chain_len
+    sta to
+    stz patch
+    jsr stream_sector                               // and back
+    inc chain_index
+    lda chain_index
+    cmp chain_len
     bne rename_loop
+
+    lda spare
+    jsr ssd.set_sector
+    jsr ssd.erase_sector
 
     jsr scan
     jsr draw_screen
@@ -619,22 +659,22 @@ copy_file:
     jsr build_chain
     ldx #0                                          // find a free sector for each one
     ldy #0
-find_free:
+find_dest:
     lda used,x
-    beq free_next
+    beq dest_next
     txa
     sta dest,y
     iny
     cpy chain_len
-    beq found_free
-free_next:
+    beq found_dest
+dest_next:
     inx
     cpx #SECTORS
-    bne find_free
+    bne find_dest
     message("not enough free sectors")
     rts
 
-found_free:
+found_dest:
     jsr start_name_edit
     jsr edit_name
     bcc copy_named
@@ -642,24 +682,27 @@ found_free:
 
 copy_named:
     message("copying...")
-    ldx #0
+    lda #(PATCH_NAME | PATCH_NEXT)
+    sta patch
+    stz chain_index
 copy_loop:
+    ldx chain_index
     lda chain,x
-    jsr read_sector
-    jsr set_buffer_name
+    sta from
+    lda dest,x
+    sta to
     lda #$ff                                        // link to the next copied sector
     ldy chain_len
     dey
-    stx tmp
-    cpy tmp
+    cpy chain_index
     beq copy_last
     lda dest+1,x
 copy_last:
-    sta buffer + <SSD_NEXT
-    lda dest,x
-    jsr write_sector
-    inx
-    cpx chain_len
+    sta new_next
+    jsr stream_sector
+    inc chain_index
+    lda chain_index
+    cmp chain_len
     bne copy_loop
 
     jsr scan
@@ -682,69 +725,51 @@ copy_found:
 
 
 /*
-Copy sector A into the buffer. Preserves X.
+Erase sector `to` and copy sector `from` into it a byte at a time, replacing
+the name with new_name if patch has PATCH_NAME, and the next-sector link with
+new_next if it has PATCH_NEXT. Erased flash reads $ff, so only other bytes
+are written. Clobbers A, X.
 */
-read_sector:
-    phx
-    jsr ssd.set_sector
-    stz src_ptr
-    lda #>SSD
-    sta src_ptr+1
-    stz str_ptr
-    lda #>buffer
-    sta str_ptr+1
-    ldx #>(SSD_END - SSD)
-    ldy #0
-read_loop:
-    lda (src_ptr),y
-    sta (str_ptr),y
-    iny
-    bne read_loop
-    inc src_ptr+1
-    inc str_ptr+1
-    dex
-    bne read_loop
-    plx
-    rts
-
-
-/*
-Erase sector A and write the buffer to it. Erased flash reads $ff,
-so only other bytes need writing. Preserves X.
-*/
-write_sector:
+stream_sector:
+    lda to
     jsr ssd.set_sector
     jsr ssd.erase_sector
-    stz src_ptr
-    lda #>buffer
-    sta src_ptr+1
     stz zp.ssd_write_addr
     lda #>SSD
     sta zp.ssd_write_addr+1
-write_loop:
-    ldy zp.ssd_write_addr
-    lda (src_ptr),y
+stream_loop:
+    lda from                                        // read the source; writing a byte
+    sta ssd.SECTOR_REG                              // switches back to zp.ssd_sector
+    lda (zp.ssd_write_addr)
+    ldx zp.ssd_write_addr+1
+    cpx #>SSD
+    bne stream_put                                  // only the header page changes
+    ldx zp.ssd_write_addr
+    cpx #<SSD_NEXT
+    bne stream_not_next
+    bit patch
+    bvc stream_put
+    lda new_next
+    bra stream_put
+stream_not_next:
+    cpx #<SSD_NAME
+    bcc stream_put
+    cpx #<(SSD_NAME + NAME_LEN)
+    bcs stream_put
+    bit patch
+    bpl stream_put
+    lda new_name - (SSD_NAME & $ff),x
+stream_put:
     cmp #$ff
-    beq write_skip
+    beq stream_skip
     jsr ssd.write_byte
-write_skip:
+stream_skip:
     inc zp.ssd_write_addr
-    bne write_loop
-    inc src_ptr+1
+    bne stream_loop
     inc zp.ssd_write_addr+1
     lda zp.ssd_write_addr+1
     cmp #>SSD_END
-    bne write_loop
-    rts
-
-
-set_buffer_name:
-    ldy #NAME_LEN-1
-set_name_loop:
-    lda new_name,y
-    sta buffer + <SSD_NAME,y
-    dey
-    bpl set_name_loop
+    bne stream_loop
     rts
 
 
@@ -895,7 +920,7 @@ draw_help:
     stz inv_mask
     lda #HELP_ROW
     jsr clear_row
-    text_at(HELP_ROW, 0, "ret:run r:ren d:del c:copy esc")
+    text_at(HELP_ROW, 0, "ent:run N:name D:del C:cpy esc")
     rts
 
 
@@ -1282,8 +1307,327 @@ pow_hi: .byte >10000, >1000, >100, >10, >1
 
 
 /* -------------------------------------------------------------------------
-Variables
+Save the file just loaded (by l or over Wi-Fi) to the SSD.
+Inputs, as set by the loaders:
+    zp.mon_addr     start address (2 bytes)
+    zp.K            load address (2 bytes)
+    zp.mon_arg1     size in bytes (2 bytes)
+    zp.G            checksum (2 bytes)
+    zp.I            file type
+    zp.J            video mode
+Asks for a name on the bottom row, then writes the file to the lowest free
+sectors, chained by their next-sector links, in the format ssd_save_file
+writes: each sector's header has the load address and size of the rest of
+the file from that sector on. Like ssd_save_file, a file whose size is a
+multiple of 3840 gets an extra sector holding the 256 bytes after its end,
+which ssd.load_file expects. Clobbers zp.mon_addr, zp.K, zp.mon_arg1,
+zp.B-zp.F, zp.M, zp.Q. Returns with the result on row 14.
 */
+.label save_cur = zp.D                              // sector being written
+.label save_first = zp.E
+.label save_next = zp.F
+.label save_len = zp.M                              // name length, then sectors needed
+.label save_free = zp.N
+.label save_on_screen = zp.Q                        // $ff if the file covers the text screen
+
+save:
+    stz save_on_screen                              // if the file was loaded over the screen, don't
+    lda zp.K+1                                      // scroll it until it's saved
+    cmp #>(vid.VRAM_START + $200)
+    bcs prompt
+    clc
+    lda zp.K
+    adc zp.mon_arg1
+    lda zp.K+1
+    adc zp.mon_arg1+1
+    bcs save_covers_screen
+    cmp #>vid.VRAM_START
+    bcc prompt
+save_covers_screen:
+    dec save_on_screen
+
+prompt:
+    jsr prompt_line
+    vid_write_string("name: ")
+    jsr clear_text_buffer
+    stz save_len
+
+save_name_key:
+    lda save_len
+    cmp #NAME_LEN
+    bcs save_wait_key
+    lda #(' ' | $40)                                // cursor
+    sta (zp.vid_ptr)
+save_wait_key:
+    jsr kb.get_press
+    beq save_wait_key
+    bmi save_wait_key
+
+    cmp #kb.ASCII_ESC
+    bne save_not_esc
+    jsr vid.shift_up_1_clear_bottom
+    vid_write_string("not saved")
+    jmp save_done
+save_not_esc:
+
+    cmp #kb.ASCII_NEWLINE
+    bne save_not_enter
+    lda save_len
+    beq save_wait_key
+    bra save_named
+save_not_enter:
+
+    cmp #kb.ASCII_BACKSPACE
+    bne save_not_backspace
+    ldy save_len
+    beq save_wait_key
+    lda #' '
+    sta (zp.vid_ptr)
+    dec_vid_ptr()
+    dey
+    lda #0
+    sta text_buffer,y
+    sty save_len
+    jmp save_name_key
+save_not_backspace:
+
+    cmp #' '
+    bcc save_wait_key
+    cmp #$7f
+    bcs save_wait_key
+    ldy save_len
+    cpy #NAME_LEN
+    bcs save_wait_key
+    sta text_buffer,y
+    jsr vid.write_ascii
+    inc_vid_ptr()
+    inc save_len
+    jmp save_name_key
+
+save_named:
+    lda #' '                                        // hide the cursor
+    sta (zp.vid_ptr)
+
+    lda #1                                          // one sector per 3840 bytes, plus one
+    sta save_len
+    lda zp.mon_arg1+1
+count_sectors:
+    cmp #15
+    bcc sectors_counted
+    sbc #15
+    inc save_len
+    bra count_sectors
+sectors_counted:
+
+    stz save_free
+    ldx #0
+count_save_free:
+    txa
+    jsr ssd.set_sector
+    lda SSD
+    beq save_free_next
+    inc save_free
+save_free_next:
+    inx
+    cpx #SECTORS
+    bne count_save_free
+
+    lda save_free
+    cmp save_len
+    bcs enough_space
+    jsr vid.shift_up_1_clear_bottom
+    vid_write_string("not enough free sectors")
+    jmp save_done
+
+enough_space:
+    jsr prompt_line
+    vid_write_string("saving...")
+    lda #$ff
+    jsr next_free
+    sta save_first
+    sta save_cur
+
+save_sector:
+    lda #$ff                                        // link to the next sector
+    sta save_next                                   // if the rest doesn't fit in this one
+    lda zp.mon_arg1+1
+    cmp #15
+    bcc no_save_next
+    lda save_cur
+    jsr next_free
+    sta save_next
+no_save_next:
+
+    lda save_cur
+    jsr ssd.set_sector
+    jsr ssd.erase_sector
+    lda #>SSD
+    sta zp.ssd_write_addr+1
+    ldx #0
+    lda #0                                          // sector holds a file
+    jsr put_header
+    inx
+    lda zp.I
+    jsr put_header
+    inx
+    lda zp.mon_addr
+    jsr put_header
+    inx
+    lda zp.mon_addr+1
+    jsr put_header
+    inx
+    lda zp.mon_arg1
+    jsr put_header
+    inx
+    lda zp.mon_arg1+1
+    jsr put_header
+    inx
+    lda zp.G
+    jsr put_header
+    inx
+    lda zp.G+1
+    jsr put_header
+    inx
+    lda save_next
+    jsr put_header
+    inx
+    lda zp.J
+    jsr put_header
+
+    ldx #<SSD_NAME                                  // the name, then zeros to the end of the page
+    ldy #0
+save_name_byte:
+    lda #0
+    cpy #NAME_LEN
+    bcs put_name_byte
+    lda text_buffer,y
+put_name_byte:
+    jsr put_header
+    iny
+    inx
+    bne save_name_byte
+
+    lda #>SSD_DATA
+    sta zp.ssd_write_addr+1
+    stz zp.ssd_write_addr
+    stz zp.ssd_pages_filled
+    ldx #0
+save_data:
+    lda (zp.K)
+    cmp #$ff
+    beq save_data_skip
+    jsr ssd.write_byte
+save_data_skip:
+    inc zp.K
+    bne save_src_done
+    inc zp.K+1
+save_src_done:
+    inc zp.ssd_write_addr
+    bne save_dest_done
+    inc zp.ssd_write_addr+1
+save_dest_done:
+    inx
+    bne save_check_done
+    inc zp.ssd_pages_filled
+    lda zp.ssd_pages_filled
+    cmp #15
+    beq save_sector_full
+save_check_done:
+    cpx zp.mon_arg1
+    bne save_data
+    lda zp.ssd_pages_filled
+    cmp zp.mon_arg1+1
+    bcc save_data
+
+    fill_vid_row(15, ' ')
+    set_vid_ptr(15, 0)
+    vid_write_string("saved to ")
+    lda save_first
+    jsr vid.write_hex
+    bra save_done
+
+save_sector_full:
+    clc                                             // the rest starts 3840 bytes on
+    lda zp.mon_addr+1
+    adc #15
+    sta zp.mon_addr+1
+    sec
+    lda zp.mon_arg1+1
+    sbc #15
+    sta zp.mon_arg1+1
+    lda save_next
+    sta save_cur
+    jmp save_sector
+
+save_done:
+    jsr vid.shift_up_1
+    rts
+
+
+/*
+Start a new bottom row: scroll up, unless that would change the file
+*/
+prompt_line:
+    bit save_on_screen
+    bmi prompt_in_place
+    jmp vid.shift_up_1_clear_bottom
+prompt_in_place:
+    fill_vid_row(15, ' ')
+    set_vid_ptr(15, 0)
+    rts
+
+
+/*
+Write A at offset X of the header page, unless it's $ff (erased flash).
+Preserves A, X, Y.
+*/
+put_header:
+    stx zp.ssd_write_addr
+    cmp #$ff
+    beq put_header_done
+    jsr ssd.write_byte
+put_header_done:
+    rts
+
+
+/*
+Lowest free sector after sector A, in A (A = $ff searches from 0).
+Clobbers X. There must be one.
+*/
+next_free:
+    tax
+next_free_loop:
+    inx
+    txa
+    jsr ssd.set_sector
+    lda SSD
+    beq next_free_loop
+    txa
+    rts
+
+
+/* -------------------------------------------------------------------------
+Tables and variables, in video RAM past the text screen
+*/
+.var files_resume = *
+* = files_scratch "file manager scratch" virtual
+names:       .fill SECTORS*NAME_LEN, 0              // 16-byte name of each sector
+used:        .fill SECTORS, 0                       // header byte 0: 0 = holds a file
+type:        .fill SECTORS, 0
+load_lo:     .fill SECTORS, 0
+load_hi:     .fill SECTORS, 0
+size_lo:     .fill SECTORS, 0
+size_hi:     .fill SECTORS, 0
+next:        .fill SECTORS, 0                       // next-sector byte from the header
+link:        .fill SECTORS, 0                       // next sector of the same file, or $ff
+pointed:     .fill SECTORS, 0                       // 1 if another sector links here
+owner:       .fill SECTORS, 0                       // first sector of the file holding this one
+head:        .fill SECTORS, 0                       // file list: first sector,
+count:       .fill SECTORS, 0                       //   number of sectors,
+broken:      .fill SECTORS, 0                       //   1 if a link couldn't be followed
+chain:       .fill SECTORS, 0                       // sectors of the selected file
+dest:        .fill SECTORS+1, 0                     // sectors to copy it to
+
 sel:         .byte 0                                // selected file
 top:         .byte 0                                // first file shown
 sel_head:    .byte 0                                // selected file's first sector
@@ -1292,29 +1636,13 @@ free_count:  .byte 0
 list_row:    .byte 0
 entry_count: .byte 0
 chain_len:   .byte 0
+chain_index: .byte 0
+spare:       .byte 0                                // free sector used while renaming
+patch:       .byte 0                                // what stream_sector replaces
+new_next:    .byte 0
 name_len:    .byte 0
 new_name:    .fill NAME_LEN+1, 0
 
-.assert "Program fits below its tables", * <= names, true
-
-
-*=$2000 "Tables" virtual
-names:      .fill SECTORS*NAME_LEN, 0               // 16-byte name of each sector
-used:       .fill SECTORS, 0                        // header byte 0: 0 = holds a file
-type:       .fill SECTORS, 0
-load_lo:    .fill SECTORS, 0
-load_hi:    .fill SECTORS, 0
-size_lo:    .fill SECTORS, 0
-size_hi:    .fill SECTORS, 0
-next:       .fill SECTORS, 0                        // next-sector byte from the header
-link:       .fill SECTORS, 0                        // next sector of the same file, or $ff
-pointed:    .fill SECTORS, 0                        // 1 if another sector links here
-owner:      .fill SECTORS, 0                        // first sector of the file holding this one
-head:       .fill SECTORS, 0                        // file list: first sector,
-count:      .fill SECTORS, 0                        //   number of sectors,
-broken:     .fill SECTORS, 0                        //   1 if a link couldn't be followed
-chain:      .fill SECTORS, 0                        // sectors of the selected file
-dest:       .fill SECTORS+1, 0                      // sectors to copy it to
-
-*=$3000 "Buffer" virtual
-buffer:     .fill $1000, 0
+.assert "names table is page aligned", <names, 0
+.assert "file manager scratch fits", * <= files_scratch + $a00, true
+* = files_resume

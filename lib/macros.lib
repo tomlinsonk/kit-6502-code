@@ -143,8 +143,8 @@ Move a block of <=256 bytes starting at source to target with a constant size
         ldx #size
 
     loop:
-        lda source,x
-        sta target,x
+        lda source-1,x
+        sta target-1,x
         dex
         bne loop
 

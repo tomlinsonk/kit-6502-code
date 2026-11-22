@@ -2,7 +2,9 @@ import java.awt.event.KeyEvent;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,12 +13,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /*
-Drives the mini assembler in the KiT emulator: assembles every 65C02 opcode and compares
-the bytes with Kick Assembler, checks errors and directives, runs an assembled program,
-and saves it to the SSD and runs it with the monitor's f command.
+Drives kit-os's line assembler (the monitor's a command) in the KiT emulator: assembles every
+65C02 opcode and compares the bytes with Kick Assembler, checks errors and directives, runs an
+assembled program, saves it to the SSD and runs it with the monitor's f command, and checks
+that a resumes where it left off without touching user RAM.
 
-Usage: java MiniAsmTest <mini-asm.prg> <video_mon.sym> <KickAss.jar>
-(run from a directory holding video_mon.bin, ssd.bin, and character-set.png)
+Usage: java MiniAsmTest <kit_os.sym> <KickAss.jar>
+(run from a directory holding kit_os.bin, ssd.bin, and character-set.png)
 */
 public class MiniAsmTest {
     private final CPU cpu;
@@ -24,8 +27,7 @@ public class MiniAsmTest {
     private final VIA via1;
     private final VIA via2;
     private final SSD ssd;
-    private final Map<String, Integer> monitor = new HashMap<>();
-    private final Map<String, Integer> asm = new HashMap<>();
+    private final Map<String, Integer> symbols = new HashMap<>();
     private final Path kickAss;
 
     private static Object field(Object object, Class<?> type, String name) throws Exception {
@@ -34,25 +36,31 @@ public class MiniAsmTest {
         return field.get(object);
     }
 
+    /* Read a KickAss symbol file into names like "mon_loop" and "mini_asm.rl_wait" */
     private static void readSymbols(String text, Map<String, Integer> into) {
-        Matcher matcher = Pattern.compile("(?m)^\\s*\\.label (\\w+)=\\$([0-9a-f]+)").matcher(text);
-        while (matcher.find()) into.put(matcher.group(1), Integer.parseInt(matcher.group(2), 16));
+        Pattern namespace = Pattern.compile("^\\.namespace (\\w+) \\{$");
+        Pattern label = Pattern.compile("^\\.label (\\w+)=\\$([0-9a-f]+)( \\{)?$");
+        Deque<String> scopes = new ArrayDeque<>();
+        for (String line : text.split("\n")) {
+            line = line.trim();
+            Matcher matcher;
+            if (line.equals("}")) {
+                scopes.pop();
+            } else if ((matcher = namespace.matcher(line)).matches()) {
+                scopes.push(matcher.group(1));
+            } else if ((matcher = label.matcher(line)).matches()) {
+                List<String> path = new ArrayList<>(scopes);
+                java.util.Collections.reverse(path);
+                path.add(matcher.group(1));
+                into.put(String.join(".", path), Integer.parseInt(matcher.group(2), 16));
+                if (matcher.group(3) != null) scopes.push(matcher.group(1));
+            }
+        }
     }
 
-    private MiniAsmTest(Path program, Path monitorSyms, Path kickAss) throws Exception {
+    private MiniAsmTest(Path kitOsSyms, Path kickAss) throws Exception {
         this.kickAss = kickAss;
-        String monitorText = Files.readString(monitorSyms);
-        readSymbols(monitorText.replaceAll("(?s)\\.namespace.*?\\n}", ""), monitor);
-
-        String asmText = Files.readString(program.resolveSibling("mini-asm.sym"));
-        int start = asmText.indexOf(".namespace mini_asm {");
-        require(start >= 0, "mini_asm namespace in symbol file");
-        int depth = 0, end = start;
-        for (int i = asmText.indexOf('{', start); i < asmText.length(); i++) {
-            if (asmText.charAt(i) == '{') depth++;
-            if (asmText.charAt(i) == '}' && --depth == 0) { end = i; break; }
-        }
-        readSymbols(asmText.substring(start, end), asm);
+        readSymbols(Files.readString(kitOsSyms), symbols);
 
         KiT kit = new KiT();
         cpu = (CPU) field(kit, KiT.class, "cpu");
@@ -60,17 +68,16 @@ public class MiniAsmTest {
         via1 = (VIA) field(kit, KiT.class, "via1");
         via2 = (VIA) field(kit, KiT.class, "via2");
         ssd = (SSD) field(kit, KiT.class, "ssd");
-        ((UART) field(kit, KiT.class, "uart")).loadPrg(program.toFile());
     }
 
-    private static int lookup(Map<String, Integer> symbols, String name) {
+    private int lookup(String name) {
         Integer value = symbols.get(name);
         if (value == null) throw new AssertionError("Missing symbol: " + name);
         return value;
     }
 
-    private int mon(String name) { return lookup(monitor, name); }
-    private int sym(String name) { return lookup(asm, name); }
+    private int mon(String name) { return lookup(name); }
+    private int sym(String name) { return lookup("mini_asm." + name); }
 
     private int read(int address) { return bus.debugRead(address); }
     private int word(int address) { return read(address) | read(address + 1) << 8; }
@@ -197,7 +204,10 @@ public class MiniAsmTest {
         String[] rows = result.split("\n");
         require(rows[14].startsWith("? " + message), "\"" + text + "\" should fail with \"" + message
             + "\":\n" + result);
-        for (int i = 0; i < 8; i++) require(read(address + i) == before[i], "\"" + text + "\" changed memory");
+        for (int i = 0; i < 8 && address + i < 0x6000; i++) {
+            require(read(address + i) == before[i], "\"" + text + "\" changed memory");
+        }
+        require(pc() == address, "\"" + text + "\" changed the address");
     }
 
     private void expectBytes(int address, int... bytes) {
@@ -271,7 +281,7 @@ public class MiniAsmTest {
     }
 
     private byte[] kickAssemble(List<Op> ops, int origin) throws Exception {
-        Path dir = Files.createTempDirectory("mini-asm-ka");
+        Path dir = Files.createTempDirectory(Path.of("").toAbsolutePath(), "mini-asm-ka");
         StringBuilder source = new StringBuilder(".cpu _65c02\n*=$" + Integer.toHexString(origin) + "\n");
         for (Op op : ops) source.append("    ").append(op.source()).append('\n');
         Path file = dir.resolve("opcodes.asm");
@@ -294,7 +304,6 @@ public class MiniAsmTest {
         require(ops.size() == 212, "Expected 212 65C02 opcodes, found " + ops.size());
         byte[] expected = kickAssemble(ops, origin);
 
-        line("2000:", origin);
         int address = origin;
         for (Op op : ops) {
             require((expected[address - origin] & 255) == op.opcode(),
@@ -362,7 +371,6 @@ public class MiniAsmTest {
         error(".x", "bad directive");
         error(".b", "bad operand");
         error(".b 100", "out of range");
-        error("5000: nop", "overlaps mini-asm");
         require(pc() == 0x3203, "Errors keep the address");
         expectListing(line("bne $3282", 0x3205), 0x3203, "d0 7d", "bne $3282");
         expectListing(line("bne $3187", 0x3207), 0x3205, "d0 80", "bne $3187");
@@ -386,20 +394,14 @@ public class MiniAsmTest {
         for (int i = 0; i < PROGRAM.length; i++) line(PROGRAM[i], next[i]);
         expectBytes(0x1000, 0xa2, 0x05, 0xa9, 0x00, 0x18, 0x69, 0x03, 0xca, 0xd0, 0xfa, 0x8d, 0x00, 0x03, 0x00);
 
-        // esc to the monitor, x back to the assembler
-        esc();
-        monitorPrompt();
-        type("x\n");
-        prompt(0x100e);
-
-        // run the program from the monitor, then g 5000 back to the assembler
+        // run the program from the monitor, then a back to the assembler where it left off
         esc();
         monitorPrompt();
         bus.write(0x300, 0);
         type("g 1000\n");
         until(() -> read(0x300) == 0x0f, "Assembled program result");
         monitorPrompt();
-        type("g 5000\n");
+        type("a\n");
         prompt(0x100e);
         System.out.println("assembled program runs");
 
@@ -455,25 +457,105 @@ public class MiniAsmTest {
         System.out.println("saved program runs with f 3f");
     }
 
-    private void run() throws Exception {
-        until(() -> cpu.getPC() == mon("mon_loop"), "Monitor boot");
-        type("l\n");
-        until(() -> cpu.getPC() == mon("get_yn_loop"), "Serial PRG load");
-        type("r");
+    /* a starts at $1000 the first time, at the typed address, or where it left off */
+    private void testStartAndResume() {
+        // a without an address, the first time
+        type("a\n");
         prompt(0x1000);
         contains(screen(), "mini-asm. esc: monitor");
+        line("nop", 0x1001);
 
+        // esc returns to the monitor prompt; a resumes, even if graphics wiped the scratch memory
+        esc();
+        monitorPrompt();
+        require(!screen().contains("mini-asm"), "Esc clears the screen:\n" + screen());
+        for (int i = 0x6c00; i < 0x6e00; i++) bus.write(i, 0xff);
+        type("a\n");
+        prompt(0x1001);
+
+        // a with an address
+        esc();
+        monitorPrompt();
+        type("a 2000\n");
+        prompt(0x2000);
+        System.out.println("a starts, exits, and resumes");
+    }
+
+    /* Code is only assembled into RAM $0000-$5fff */
+    private void testRamRange() {
+        String notRam = "not in ram 0000-5fff";
+        type("a\n");
+        prompt(0x100e);
+        line("5ff0:", 0x5ff0);
+        error("6000: nop", notRam);
+        error("9000: .b 1", notRam);
+        error("7800: nop", notRam);
+        error("ffff: nop", notRam);
+        error("5fff: lda $1234", notRam);
+        error(".t 0123456789abcdefg", notRam);
+        expectListing(line(".t 0123456789abcdef", 0x6000), 0x5ff0, "30 31 32 33 34 35 36 37+", "");
+        error("nop", notRam);
+        expectListing(line("5ffd: jmp $1234", 0x6000), 0x5ffd, "4c 34 12", "jmp $1234");
+        expectListing(line("5fff: brk", 0x6000), 0x5fff, "00", "brk");
+
+        // a at a ROM address starts there, but can't write
+        esc();
+        monitorPrompt();
+        type("a 9000\n");
+        prompt(0x9000);
+        error("nop", notRam);
+        System.out.println("only assembles into ram");
+    }
+
+    /* Using the assembler leaves user RAM and user zero page alone, apart from what it assembles */
+    private void testUserMemory() {
+        esc();
+        monitorPrompt();
+        int[] before = new int[0x6000];
+        for (int i = 0x300; i < 0x6000; i++) {
+            bus.write(i, (i * 7 + 3) & 255);
+            before[i] = read(i);
+        }
+        for (int i = 0x80; i < 0x100; i++) before[i] = read(i);
+        type("a 4000\n");
+        prompt(0x4000);
+        line("lda #$12", 0x4002);
+        error("bad", "bad mnemonic");
+        error(".s 3f 4000 3000", "bad size");
+        esc();
+        monitorPrompt();
+        before[0x4000] = 0xa9;
+        before[0x4001] = 0x12;
+        for (int i = 0x80; i < 0x6000; i++) {
+            if (i == 0x100) i = 0x300;
+            require(read(i) == before[i], String.format("$%04x changed: %02x -> %02x", i, before[i], read(i)));
+        }
+
+        // a without a valid saved address starts at $1000
+        bus.write(sym("magic"), 0);
+        type("a\n");
+        prompt(0x1000);
+        System.out.println("user memory untouched");
+    }
+
+    private void run() throws Exception {
+        until(() -> cpu.getPC() == mon("mon_loop"), "Monitor boot");
+        monitorPrompt();
+
+        testStartAndResume();
         testAllOpcodes();
         testSyntax();
         testRunAndSave();
+        testRamRange();
+        testUserMemory();
         System.out.println("All mini-asm emulator tests passed");
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 3) {
-            System.err.println("usage: MiniAsmTest <mini-asm.prg> <video_mon.sym> <KickAss.jar>");
+        if (args.length != 2) {
+            System.err.println("usage: MiniAsmTest <kit_os.sym> <KickAss.jar>");
             System.exit(2);
         }
-        new MiniAsmTest(Path.of(args[0]).toAbsolutePath(), Path.of(args[1]), Path.of(args[2]).toAbsolutePath()).run();
+        new MiniAsmTest(Path.of(args[0]), Path.of(args[1]).toAbsolutePath()).run();
     }
 }

@@ -6,6 +6,7 @@
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "via.lib"
 #import "zp.lib"
 #import "macros.lib"
@@ -27,7 +28,7 @@
 Resolution Graphics One.
 Set the pixel at the coordinates in X and Y (X: column 0 - 127, Y: row 0 - 63)
 */
-set_pixel: {
+_set_pixel: {
     phx
     phy
     pha
@@ -55,7 +56,7 @@ bit_table:
 Resolution Graphics One.
 Clear the pixel at the coordinates in X and Y (X: column 0 - 127, Y: row 0 - 63)
 */
-clear_pixel: {
+_clear_pixel: {
     phx
     phy
     pha
@@ -84,7 +85,7 @@ inv_bit_table:
 Read the pixel at the coordinates in X and Y (X: column 0 - 127, Y: row 0 - 63)
 into A register ($00 or something non-zero)
 */
-read_pixel: {
+_read_pixel: {
     phy
     phx
 
@@ -107,7 +108,7 @@ read_pixel: {
 /* --------------------------------------------------------------------------------------- 
 Clear the screen
 */
-clear_screen: {
+_clear_screen: {
     phx
 
     ldx #0
@@ -149,5 +150,19 @@ loop:   stz VRAM_START + i * 256,x
     ora zp.vid_ptr                                              // combine with high nibble
     sta zp.vid_ptr                                              // store in vid pointer low byte
 }
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var vid_rg1_api_resume = *
+* = api.VID_RG1 "vid_rg1 API"
+set_pixel:    jmp _set_pixel
+clear_pixel:  jmp _clear_pixel
+read_pixel:   jmp _read_pixel
+clear_screen: jmp _clear_screen
+api_check("vid_rg1", api.VID_RG1, 16)
+* = vid_rg1_api_resume
 
 #endif

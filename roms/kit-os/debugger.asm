@@ -1,67 +1,62 @@
-/*
-KiT debugger: 65C02 disassembler, single stepper, and hex editor.
-Loads at $4800. See README.md for keys and the memory map.
-*/
-.cpu _65c02
-.encoding "ascii"
 .filenamespace debugger
 
-#define PCB
+/*
+Disassembler, single stepper, and hex editor (b command). See README.md for the keys.
 
-#import "video_mon.sym"
+Memory:
+    $00-$0f             scratch (the user's values are in zp_reg_stash, as while the monitor runs)
+    $0100-$014f         debugger stack; holds a copy of the breakpoints while user code runs
+    debugger_ram        checksum, step trampoline, and values that must survive the stepped instruction
+    debugger_scratch    the user's text screen, registers, breakpoints, view, temporaries
+    $6200-$6dff, $7200-$75ff    sector copy while an SSD patch erases a sector
 
-#define MACROS_ONLY
-#import "../../lib/macros.lib"
-#import "../../lib/vid.lib"
-#import "../../lib/kb.lib"
+The user's zero page $00-$0f and IRQ vector stay in the monitor's stash (zp_reg_stash,
+irq_addr_stash); the rest of zero page is shared. The user's registers are taken from and
+left on the monitor's stack, so the monitor's s, u, and x commands work on them.
+*/
 
-.label MON_IRQ = irq                                // monitor IRQ/BRK handler
 .label SCREEN = $6000
-.label MODE_REG = $7901                             // vid.MODE_REG (VIA2 port A)
-.label FLASH_BUF = $6200                            // 4 KB scratch for sector rewrites (graphics VRAM)
 .label SSD_WINDOW = $8000
 .label SSD_END_HI = $90
-.label DBG_S = $4f                                  // debugger stack: $0100-$014f
+.label DBG_S = $4f                                  // debugger stack: $0124-$014f
+.label BP_SHADOW = $0100                            // breakpoint table while user code runs (36 bytes)
 .label ROWS = 13                                    // content rows (screen rows 2-14)
 .label NUM_BPS = 8                                  // user breakpoints; slot 8 is the step-over temp
+.label BP_BYTES = 4 * (NUM_BPS + 1)
 .label KB_BUF_LAST = 15
-.label USER_PC = $1000
-.label ZP_SECTOR = $42                              // zp.ssd_sector
-.label ZP_IRQ = $1e                                 // zp.irq_addr
+.label DEFAULT_PC = $1000
+.label BP_MIN_HI = $03                              // breakpoints: user RAM $0300-$5fff
+.label BP_END_HI = $60
+.label FLASH_BUF_HI = $62                           // sector copy: pages $62-$6d, then $72-$75
+.label FLASH_GAP_HI = >debugger_scratch
+.label FLASH_SKIP = $72 - FLASH_GAP_HI
 
-// Zero page scratch. These addresses are swapped with the user's copies, so
-// their contents do not survive exec_tramp or a run.
-.label ptr = $00                                    // peek/poke address
-.label dpc = $02                                    // address being disassembled
-.label scr = $04                                    // screen row pointer
-.label op = $06                                     // decoded instruction: op, opnd, opnd+1
-.label opnd = $07
-.label mode = $09
-.label len = $0a
-.label val = $0b                                    // 16-bit result
-.label tmp = $0d
-.label aptr = $30                                   // alias pointer
-.label sp = $32                                     // string pointer
+// Zero page scratch ($00-$0f). Not preserved across exec_tramp or a run.
+.label ptr = zp.B                                   // peek/poke address
+.label dpc = zp.D                                   // address being disassembled
+.label scr = zp.F                                   // screen row pointer
+.label aptr = zp.H                                  // alias pointer
+.label sp = zp.J                                    // string pointer
+.label val = zp.L                                   // 16-bit result
+.label op = zp.N                                    // decoded instruction: op, opnd, opnd+1
+.label opnd = zp.O
+.label tmp = zp.Q
+
+// debugger_ram: survives the user's code writing to debugger_scratch
+.label chk = debugger_ram                           // 2: checksum of the session state
+.label tramp = debugger_ram + 2                     // 9: single-step trampoline
+.label kbw_before = tramp                           // while user code runs
+.label stop_reason = tramp + 1
+.label running = tramp + 3                          // RUN_MAGIC while user code runs with breakpoints in
+.const RUN_MAGIC = $e5
+.label dbg_s = debugger_ram + 11                    // debugger S during a step, user S at a stop
+.label npc = debugger_ram + 12                      // 2: PC after the step
+.label btarget = debugger_ram + 14                  // 2: branch target
+.assert "debugger_ram holds 16 bytes", btarget + 2 - debugger_ram, 16
 
 // Addressing modes
-.const M_IMP = 0
-.const M_IMM = 1
-.const M_ZP = 2
-.const M_ZPX = 3
-.const M_ZPY = 4
-.const M_IZX = 5
-.const M_IZY = 6
-.const M_IZP = 7
-.const M_ABS = 8
-.const M_ABX = 9
-.const M_ABY = 10
-.const M_IND = 11
-.const M_IAX = 12
-.const M_REL = 13
-.const M_ZPR = 14
-.const M_U1 = 15
-.const M_U2 = 16
-.const M_U3 = 17
+.const M_REL = OP_REL                               // addressing modes: see opcodes.asm
+.const M_ZPR = OP_ZPR
 
 
 .macro print(str) {
@@ -88,20 +83,58 @@ done:
 }
 
 
-.segmentdef Vars [start=$5c00, virtual]
-
-.segment Code [outPrg="debugger.prg", start=$4800]
-
+/*
+Start the debugger. Carry set: new session with the user PC at zp.mon_addr. Carry clear:
+continue the last session with the user's registers from the monitor's stack, or start a
+new one at $1000 if the session was lost.
+The monitor's stack holds Y, A, X, P, PC lo, PC hi (from brk).
+*/
 start:
-    ldx #DBG_S
-    txs
     cld
-    jsr swap_out                                    // the monitor's zp and screen become the user's
+    php
+    jsr finish_run
+    plp
+    bcs new_session
+    jsr check_all
+    bcs new_default
 
-    lda #<USER_PC
-    sta reg_pc
-    lda #>USER_PC
-    sta reg_pc+1
+    tsx                                             // continue: registers from the monitor's stack
+    inx
+    lda $0100,x
+    sta reg_y
+    inx
+    lda $0100,x
+    sta reg_a
+    inx
+    lda $0100,x
+    sta reg_x
+    inx
+    lda $0100,x
+    and #$ef
+    ora #$20
+    sta reg_p
+    inx
+    lda $0100,x
+    sta val
+    inx
+    lda $0100,x
+    sta val+1
+    stx reg_s
+    lda val                                         // the PC moved (u, or a brk): show it
+    cmp reg_pc
+    bne pc_moved
+    lda val+1
+    cmp reg_pc+1
+    beq enter
+pc_moved:
+    mov2 val : reg_pc
+    jsr view_pc
+    bra enter
+
+new_default:
+    mov2 #DEFAULT_PC : zp.mon_addr
+new_session:
+    mov2 zp.mon_addr : reg_pc
     stz reg_a
     stz reg_x
     stz reg_y
@@ -109,22 +142,17 @@ start:
     sta reg_p
     lda #$ff
     sta reg_s
+    jsr clear_bps
+    jsr view_pc
+    jsr save_screen                                 // the monitor's screen becomes the user's
 
-    ldx #NUM_BPS
-!:  stz bp_on,x
-    dex
-    bpl !-
-
-    stz view
+enter:
+    ldx #DBG_S
+    txs
+    lda #vid.MODE_TEXT
+    sta vid.MODE_REG
     stz pending
     stz msg+1
-    stz htop
-    stz htop+1
-    stz line_lo
-    stz line_hi
-    mov2 reg_pc : cur
-    mov2 reg_pc : top
-
     jsr flush_kb
 
 main:
@@ -203,9 +231,7 @@ to_code:
     rts
 !:  cmp #kb.ASCII_ESC
     bne !+
-    brk                                             // enter the monitor; its x command returns here
-    nop
-    jmp flush_kb
+    jmp esc_exit
 !:  ldx view
     beq code_keys
     jmp hex_keys
@@ -435,7 +461,6 @@ pick_sector:
     lda val
     cmp #64
     bcs ps_bad
-    sta user_zp+ZP_SECTOR
     jsr ssd.set_sector
 !:  rts
 ps_bad:
@@ -488,19 +513,19 @@ view_user:
     inx
     bne !-
     lda user_mode
-    sta MODE_REG
+    sta vid.MODE_REG
 vu_wait:
     jsr kb.get_press
     beq vu_wait
     lda #vid.MODE_TEXT
-    sta MODE_REG
+    sta vid.MODE_REG
     rts
 
 toggle_bp:
     mov2 cur : ptr
     jsr bp_addr_ok
     bcc !+
-    set_msg("bp must be in $0200-$47ff")
+    set_msg("bp must be in $0300-$5fff")
     rts
 !:  ldx #NUM_BPS-1
 !:  lda bp_on,x
@@ -532,12 +557,12 @@ tb_set:
     sta bp_on,x
     rts
 
-// C=0 if ptr can hold a breakpoint: RAM $0200-$47ff (below the debugger)
+// C=0 if ptr can hold a breakpoint: user RAM $0300-$5fff
 bp_addr_ok:
     lda ptr+1
-    cmp #$02
+    cmp #BP_MIN_HI
     bcc bp_bad
-    cmp #$48
+    cmp #BP_END_HI
     bcs bp_bad
     clc
     rts
@@ -770,6 +795,7 @@ set_pc:
 
 // Run the trampoline in the user's context
 exec_tramp:
+    jsr seal_sess
     jsr swap_in
     tsx
     stx dbg_s
@@ -792,6 +818,7 @@ step_tk:
     sta reg_a
     lda #1
     sta taken
+.assert "a trampoline never looks like a run", (<step_nt) != RUN_MAGIC && (>step_nt) != RUN_MAGIC, true
 step_save:
     stx reg_x
     sty reg_y
@@ -804,7 +831,13 @@ step_save:
     ldx dbg_s
     txs
     cld
-    jmp swap_out
+    jsr swap_out
+    jsr check_sess
+    bcc !+
+    jsr clear_bps                                   // the step wrote over the debugger's memory
+    jsr view_pc
+    set_msg("debugger memory overwritten")
+!:  rts
 
 // User stack helpers
 push_word:                                          // push A (hi) then X (lo)
@@ -873,17 +906,26 @@ ib_next:
     cpx #NUM_BPS+1
     bne ib_loop
 
+    ldx #BP_BYTES-1                                 // keep a copy where graphics can't overwrite it
+!:  lda bp_lo,x
+    sta BP_SHADOW,x
+    dex
+    bpl !-
+    lda #RUN_MAGIC
+    sta running
+    jsr seal_all
+
     jsr swap_in
-    lda ZP_IRQ                                      // catch brk/F12 if the monitor handler is in use
-    cmp #<MON_IRQ
+    lda zp.irq_addr                                 // catch brk/F12 if the monitor handler is in use
+    cmp #<irq
     bne !+
-    lda ZP_IRQ+1
-    cmp #>MON_IRQ
+    lda zp.irq_addr+1
+    cmp #>irq
     bne !+
     lda #<dbg_irq
-    sta ZP_IRQ
+    sta zp.irq_addr
     lda #>dbg_irq
-    sta ZP_IRQ+1
+    sta zp.irq_addr+1
 !:  ldx reg_s
     txs
     lda reg_pc+1
@@ -902,7 +944,10 @@ dbg_irq:
     pha
     phx
     tsx
-    lda $0103,x                                     // pushed P
+    inx
+    inx
+    inx
+    lda $0100,x                                     // pushed P
     and #$10
     bne di_brk
     lda zp.kb_write_ptr
@@ -913,7 +958,7 @@ dbg_irq:
     pha
     lda #$04
     pha
-    jmp MON_IRQ
+    jmp irq
 di_ret:
     ldx kbw_before
     cpx zp.kb_write_ptr
@@ -939,41 +984,50 @@ di_out:
 di_brk:
     stz stop_reason
 enter_from_run:
-    plx
-    pla
-    sta reg_a
-    stx reg_x
-    sty reg_y
-    pla
-    and #$ef
-    ora #$20
-    sta reg_p
-    pla
-    sta reg_pc
-    pla
-    sta reg_pc+1
+    phy                                             // user stack: Y, X, A, P, PC lo, PC hi
     tsx
-    stx reg_s
+    stx dbg_s
     ldx #DBG_S
     txs
     cld
-    jsr swap_out
-
-    ldx #NUM_BPS                                    // remove breakpoints in reverse order
-rb_loop:
-    lda bp_on,x
-    beq rb_next
-    lda bp_lo,x
-    sta ptr
-    lda bp_hi,x
-    sta ptr+1
-    lda bp_save,x
-    sta (ptr)
-rb_next:
+    jsr restore_irq
+    jsr save_zp
+    jsr check_all                                   // before anything in debugger_scratch changes
+    php
+    ldx dbg_s
+    inx
+    lda $0100,x
+    sta reg_y
+    inx
+    lda $0100,x
+    sta reg_x
+    inx
+    lda $0100,x
+    sta reg_a
+    inx
+    lda $0100,x
+    and #$ef
+    ora #$20
+    sta reg_p
+    inx
+    lda $0100,x
+    sta reg_pc
+    inx
+    lda $0100,x
+    sta reg_pc+1
+    stx reg_s
+    jsr save_screen
+    jsr finish_run
+    ldx #BP_BYTES-1
+!:  lda BP_SHADOW,x
+    sta bp_lo,x
     dex
-    bpl rb_loop
+    bpl !-
+    plp
+    bcc !+
+    jsr view_pc                                     // the program wrote over the debugger's memory
 
-    lda stop_reason
+!:  lda stop_reason
     beq !+
     set_msg("stopped")
     bra er_out
@@ -999,20 +1053,16 @@ er_out:
 
 
 /* ---------------------------------------------------------------------------------------
-Context switching. These zero page bytes are swapped (keyboard state is shared):
-$00-$0f, $13-$1f, $30-$37, $40-$45. Interrupts stay enabled during the copies so no
-keyboard bytes are lost; only the IRQ vector ($1e-$1f) is swapped with interrupts off.
+Context switching. The user's $00-$0f and IRQ vector live in the monitor's stash while the
+debugger runs; the user's text screen and video mode live in user_screen and user_mode.
+The rest of zero page is shared.
 */
 
 // Install the user's context. Returns with interrupts disabled.
 swap_in:
-    ldx #$4f
-!:  lda swap_map,x
-    cmp #1
-    bne si_next
-    lda user_zp,x
+    ldx #15
+!:  lda zp_reg_stash,x
     sta $00,x
-si_next:
     dex
     bpl !-
     ldx #0
@@ -1023,45 +1073,24 @@ si_next:
     inx
     bne !-
     lda user_mode
-    sta MODE_REG
+    sta vid.MODE_REG
     sei
-    lda user_zp+ZP_IRQ
-    sta ZP_IRQ
-    lda user_zp+ZP_IRQ+1
-    sta ZP_IRQ+1
+    lda irq_addr_stash
+    sta zp.irq_addr
+    lda irq_addr_stash+1
+    sta zp.irq_addr+1
     rts
 
 // Save the user's context and install the debugger's. Returns with interrupts enabled.
 swap_out:
-    sei
-    lda ZP_IRQ
-    ldx ZP_IRQ+1
-    cmp #<dbg_irq                                   // undo our run-time handler
-    bne !+
-    cpx #>dbg_irq
-    bne !+
-    lda #<MON_IRQ
-    ldx #>MON_IRQ
-!:  sta user_zp+ZP_IRQ
-    stx user_zp+ZP_IRQ+1
-    lda #<MON_IRQ
-    sta ZP_IRQ
-    lda #>MON_IRQ
-    sta ZP_IRQ+1
-    cli
-    lda MODE_REG
+    jsr restore_irq
+    jsr save_zp
+// Copy the screen and video mode to user_screen and user_mode, then show text mode
+save_screen:
+    lda vid.MODE_REG
     sta user_mode
     lda #vid.MODE_TEXT
-    sta MODE_REG
-    ldx #$4f
-!:  lda swap_map,x
-    cmp #1
-    bne so_next
-    lda $00,x
-    sta user_zp,x
-so_next:
-    dex
-    bpl !-
+    sta vid.MODE_REG
     ldx #0
 !:  lda SCREEN,x
     sta user_screen,x
@@ -1071,16 +1100,164 @@ so_next:
     bne !-
     rts
 
-swap_map:
-    .fill 16, 1                                     // $00-$0f
-    .fill 3, 0                                      // $10-$12 keyboard
-    .fill 11, 1                                     // $13-$1d
-    .fill 2, 2                                      // $1e-$1f irq vector (swapped separately)
-    .fill 16, 0                                     // $20-$2f keyboard buffer
-    .fill 8, 1                                      // $30-$37
-    .fill 8, 0                                      // $38-$3f
-    .fill 6, 1                                      // $40-$45
-    .fill 10, 0                                     // $46-$4f
+// Save the user's IRQ vector and install the monitor's. Returns with interrupts enabled.
+restore_irq:
+    sei
+    lda zp.irq_addr
+    ldx zp.irq_addr+1
+    cmp #<dbg_irq                                   // undo our run-time handler
+    bne !+
+    cpx #>dbg_irq
+    bne !+
+    lda #<irq
+    ldx #>irq
+!:  sta irq_addr_stash
+    stx irq_addr_stash+1
+    lda #<irq
+    sta zp.irq_addr
+    lda #>irq
+    sta zp.irq_addr+1
+    cli
+    rts
+
+save_zp:
+    ldx #15
+!:  lda $00,x
+    sta zp_reg_stash,x
+    dex
+    bpl !-
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Session state. debugger_scratch is video RAM, so graphics can overwrite it. A checksum in
+debugger_ram checks it after the user's code runs and when b continues a session.
+*/
+
+// Leave to the monitor with the user's registers on its stack (as if the user's code did a brk)
+esc_exit:
+    jsr seal_all
+    ldx reg_s
+    lda reg_pc+1
+    sta $0100,x
+    dex
+    lda reg_pc
+    sta $0100,x
+    dex
+    lda reg_p
+    sta $0100,x
+    dex
+    lda reg_x
+    sta $0100,x
+    dex
+    lda reg_a
+    sta $0100,x
+    dex
+    lda reg_y
+    sta $0100,x
+    dex
+    txs
+    jmp app_exit
+
+// If user code ran with breakpoints in (and maybe never came back), put the original bytes back
+finish_run:
+    lda running
+    cmp #RUN_MAGIC
+    bne fr_done
+    stz running
+    ldx #NUM_BPS                                    // reverse order, in case two share an address
+fr_loop:
+    lda BP_SHADOW+bp_on-bp_lo,x
+    cmp #1
+    bne fr_next
+    lda BP_SHADOW+bp_lo-bp_lo,x
+    sta ptr
+    lda BP_SHADOW+bp_hi-bp_lo,x
+    sta ptr+1
+    jsr bp_addr_ok
+    bcs fr_next
+    lda (ptr)
+    bne fr_next                                     // not our brk any more
+    lda BP_SHADOW+bp_save-bp_lo,x
+    sta (ptr)
+fr_next:
+    dex
+    bpl fr_loop
+fr_done:
+    rts
+
+clear_bps:
+    ldx #NUM_BPS
+!:  stz bp_on,x
+    dex
+    bpl !-
+    rts
+
+// Code view with the cursor at the PC
+view_pc:
+    stz view
+    stz pending
+    mov2 reg_pc : cur
+    mov2 reg_pc : top
+    lda cur
+    and #$f8
+    sta htop
+    lda cur+1
+    sta htop+1
+    rts
+
+seal_all:
+    mov2 #session_all : aptr
+    bra seal
+seal_sess:
+    mov2 #session : aptr
+seal:
+    jsr checksum
+    mov2 val : chk
+    rts
+
+// C=0 if the state matches the last seal
+check_all:
+    mov2 #session_all : aptr
+    bra check
+check_sess:
+    mov2 #session : aptr
+check:
+    jsr checksum
+    lda val
+    cmp chk
+    bne ck_bad
+    lda val+1
+    cmp chk+1
+    bne ck_bad
+    clc
+    rts
+ck_bad:
+    sec
+    rts
+
+// val = checksum of aptr up to session_end
+checksum:
+    lda #$5a
+    sta val
+    lda #$a5
+    sta val+1
+cs_loop:
+    lda (aptr)
+    clc
+    adc val
+    sta val
+    clc
+    adc val+1
+    sta val+1
+    inc2 aptr
+    lda aptr
+    cmp #<session_end
+    bne cs_loop
+    lda aptr+1
+    cmp #>session_end
+    bne cs_loop
+    rts
 
 
 /* ---------------------------------------------------------------------------------------
@@ -1093,11 +1270,15 @@ peek:
     lda ptr+1
     bne pk_hi
     ldx ptr
-    cpx #$50
+    cpx #$10
+    bcs !+
+    lda zp_reg_stash,x
+    bra pk_ok
+!:  cpx #zp.irq_addr
+    bcc pk_plain
+    cpx #zp.irq_addr+2
     bcs pk_plain
-    lda swap_map,x
-    beq pk_plain
-    lda user_zp,x
+    lda irq_addr_stash-zp.irq_addr,x
     bra pk_ok
 pk_hi:
     cmp #$62
@@ -1129,12 +1310,18 @@ poke:
     lda ptr+1
     bne po_hi
     ldx ptr
-    cpx #$50
-    bcs po_plain
-    lda swap_map,x
-    beq po_plain
+    cpx #$10
+    bcs !+
     pla
-    sta user_zp,x
+    sta zp_reg_stash,x
+    plx
+    rts
+!:  cpx #zp.irq_addr
+    bcc po_plain
+    cpx #zp.irq_addr+2
+    bcs po_plain
+    pla
+    sta irq_addr_stash-zp.irq_addr,x
     plx
     rts
 po_hi:
@@ -1171,10 +1358,10 @@ screen_alias:
     sta aptr+1
     rts
 
-// Write A to the SSD at ptr in the user's sector. Erases and rewrites the sector if a bit goes 0->1.
+// Write A to the SSD at ptr in the current sector. Erases and rewrites the sector if a bit goes 0->1.
 flash_poke:
     sta newv
-    lda user_zp+ZP_SECTOR
+    lda zp.ssd_sector
     jsr ssd.set_sector
     lda (ptr)
     cmp newv
@@ -1188,40 +1375,66 @@ flash_poke:
 fp_out:
     rts
 fp_erase:
-    mov2 #SSD_WINDOW : aptr
-    mov2 #FLASH_BUF : scr
-    ldx #$10
+    stz aptr                                        // copy the sector to the buffer
+    stz scr
+    lda #>SSD_WINDOW
+    sta aptr+1
+    lda #FLASH_BUF_HI
+    sta scr+1
     ldy #0
 !:  lda (aptr),y
     sta (scr),y
     iny
     bne !-
     inc aptr+1
-    inc scr+1
-    dex
+    jsr next_buf_page
+    lda aptr+1
+    cmp #SSD_END_HI
     bne !-
-    lda ptr
+    lda ptr                                         // patch the byte in the buffer
     sta aptr
     lda ptr+1
     sec
-    sbc #(>SSD_WINDOW) - (>FLASH_BUF)
-    sta aptr+1
+    sbc #(>SSD_WINDOW) - FLASH_BUF_HI
+    cmp #FLASH_GAP_HI
+    bcc !+
+    adc #FLASH_SKIP-1                               // C=1
+!:  sta aptr+1
     lda newv
     sta (aptr)
     jsr ssd.erase_sector
-    mov2 #SSD_WINDOW : zp.ssd_write_addr
-    mov2 #FLASH_BUF : aptr
-!:  lda (aptr)
+    stz zp.ssd_write_addr                           // write back every byte that isn't $ff
+    lda #>SSD_WINDOW
+    sta zp.ssd_write_addr+1
+    stz scr
+    lda #FLASH_BUF_HI
+    sta scr+1
+fp_page:
+    ldy #0
+fp_byte:
+    lda (scr),y
     cmp #$ff
-    beq fp_skip
+    beq !+
+    sty zp.ssd_write_addr
     jsr ssd.write_byte
-fp_skip:
-    inc2 aptr
-    inc2 zp.ssd_write_addr
+!:  iny
+    bne fp_byte
+    inc zp.ssd_write_addr+1
+    jsr next_buf_page
     lda zp.ssd_write_addr+1
     cmp #SSD_END_HI
-    bne !-
+    bne fp_page
     rts
+
+// Advance scr to the next page of the sector buffer, skipping debugger_scratch
+next_buf_page:
+    inc scr+1
+    lda scr+1
+    cmp #FLASH_GAP_HI
+    bne !+
+    lda #FLASH_GAP_HI+FLASH_SKIP
+    sta scr+1
+!:  rts
 
 
 /* ---------------------------------------------------------------------------------------
@@ -1576,7 +1789,7 @@ dr_flag:
     cpx #6
     bne !-
     print("  ssd ")
-    lda user_zp+ZP_SECTOR
+    lda zp.ssd_sector
     jsr put_hex
     lda #28
     sta lp
@@ -1782,67 +1995,8 @@ hex_digits:
 
 
 /* ---------------------------------------------------------------------------------------
-Test hook: format the code line for dpc, then spin
+Operand formats for disassembly (opcode tables are in opcodes.asm)
 */
-test_line:
-    jsr code_line
-test_done:
-    bra test_done
-
-
-/* ---------------------------------------------------------------------------------------
-Opcode tables (WDC 65C02)
-*/
-.var opTable = List().add(
-    "brk imp","ora izx","??? u2","??? u1","tsb zp","ora zp","asl zp","rmb zp","php imp","ora imm","asl imp","??? u1","tsb abs","ora abs","asl abs","bbr zpr",
-    "bpl rel","ora izy","ora izp","??? u1","trb zp","ora zpx","asl zpx","rmb zp","clc imp","ora aby","inc imp","??? u1","trb abs","ora abx","asl abx","bbr zpr",
-    "jsr abs","and izx","??? u2","??? u1","bit zp","and zp","rol zp","rmb zp","plp imp","and imm","rol imp","??? u1","bit abs","and abs","rol abs","bbr zpr",
-    "bmi rel","and izy","and izp","??? u1","bit zpx","and zpx","rol zpx","rmb zp","sec imp","and aby","dec imp","??? u1","bit abx","and abx","rol abx","bbr zpr",
-    "rti imp","eor izx","??? u2","??? u1","??? u2","eor zp","lsr zp","rmb zp","pha imp","eor imm","lsr imp","??? u1","jmp abs","eor abs","lsr abs","bbr zpr",
-    "bvc rel","eor izy","eor izp","??? u1","??? u2","eor zpx","lsr zpx","rmb zp","cli imp","eor aby","phy imp","??? u1","??? u3","eor abx","lsr abx","bbr zpr",
-    "rts imp","adc izx","??? u2","??? u1","stz zp","adc zp","ror zp","rmb zp","pla imp","adc imm","ror imp","??? u1","jmp ind","adc abs","ror abs","bbr zpr",
-    "bvs rel","adc izy","adc izp","??? u1","stz zpx","adc zpx","ror zpx","rmb zp","sei imp","adc aby","ply imp","??? u1","jmp iax","adc abx","ror abx","bbr zpr",
-    "bra rel","sta izx","??? u2","??? u1","sty zp","sta zp","stx zp","smb zp","dey imp","bit imm","txa imp","??? u1","sty abs","sta abs","stx abs","bbs zpr",
-    "bcc rel","sta izy","sta izp","??? u1","sty zpx","sta zpx","stx zpy","smb zp","tya imp","sta aby","txs imp","??? u1","stz abs","sta abx","stz abx","bbs zpr",
-    "ldy imm","lda izx","ldx imm","??? u1","ldy zp","lda zp","ldx zp","smb zp","tay imp","lda imm","tax imp","??? u1","ldy abs","lda abs","ldx abs","bbs zpr",
-    "bcs rel","lda izy","lda izp","??? u1","ldy zpx","lda zpx","ldx zpy","smb zp","clv imp","lda aby","tsx imp","??? u1","ldy abx","lda abx","ldx aby","bbs zpr",
-    "cpy imm","cmp izx","??? u2","??? u1","cpy zp","cmp zp","dec zp","smb zp","iny imp","cmp imm","dex imp","wai imp","cpy abs","cmp abs","dec abs","bbs zpr",
-    "bne rel","cmp izy","cmp izp","??? u1","??? u2","cmp zpx","dec zpx","smb zp","cld imp","cmp aby","phx imp","stp imp","??? u3","cmp abx","dec abx","bbs zpr",
-    "cpx imm","sbc izx","??? u2","??? u1","cpx zp","sbc zp","inc zp","smb zp","inx imp","sbc imm","nop imp","??? u1","cpx abs","sbc abs","inc abs","bbs zpr",
-    "beq rel","sbc izy","sbc izp","??? u1","??? u2","sbc zpx","inc zpx","smb zp","sed imp","sbc aby","plx imp","??? u1","??? u3","sbc abx","inc abx","bbs zpr"
-)
-.assert "256 opcodes", opTable.size(), 256
-
-.var modeIds = Hashtable().put(
-    "imp",M_IMP,"imm",M_IMM,"zp",M_ZP,"zpx",M_ZPX,"zpy",M_ZPY,"izx",M_IZX,"izy",M_IZY,"izp",M_IZP,
-    "abs",M_ABS,"abx",M_ABX,"aby",M_ABY,"ind",M_IND,"iax",M_IAX,"rel",M_REL,"zpr",M_ZPR,
-    "u1",M_U1,"u2",M_U2,"u3",M_U3)
-.var mnemNames = List()
-.var mnemOffsets = Hashtable()
-.var opMnem = List()
-.var opMode = List()
-.for (var i = 0; i < 256; i++) {
-    .var entry = opTable.get(i)
-    .var name = entry.substring(0, 3)
-    .if (!mnemOffsets.containsKey(name)) {
-        .eval mnemOffsets.put(name, mnemNames.size() * 3)
-        .eval mnemNames.add(name)
-    }
-    .eval opMnem.add(mnemOffsets.get(name))
-    .eval opMode.add(modeIds.get(entry.substring(4, entry.size())))
-}
-.assert "mnemonic table fits in 256 bytes", mnemNames.size() * 3 <= 256, true
-
-op_mnem:
-    .fill 256, opMnem.get(i)
-op_mode:
-    .fill 256, opMode.get(i)
-mnem_text:
-    .for (var i = 0; i < mnemNames.size(); i++) .text mnemNames.get(i)
-
-mode_len:
-    .byte 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 2, 3, 1, 2, 3
-
 // Operand formats: b = byte, w = word, r = branch target
 fmt_text:
 f_none: .byte 0
@@ -1874,30 +2028,22 @@ f_rel:  .text "$r"
         .byte 0
 f_zpr:  .text "$b,$r"
         .byte 0
-mode_fmt:
-    .byte f_none-fmt_text, f_imm-fmt_text, f_zp-fmt_text, f_zpx-fmt_text, f_zpy-fmt_text
-    .byte f_izx-fmt_text, f_izy-fmt_text, f_izp-fmt_text, f_abs-fmt_text, f_abx-fmt_text
-    .byte f_aby-fmt_text, f_ind-fmt_text, f_iax-fmt_text, f_rel-fmt_text, f_zpr-fmt_text
-    .byte f_none-fmt_text, f_none-fmt_text, f_none-fmt_text
+mode_fmt:                                           // indexed by OP_* mode
+    .byte f_none-fmt_text, f_none-fmt_text, f_imm-fmt_text, f_zp-fmt_text, f_zpx-fmt_text
+    .byte f_zpy-fmt_text, f_izx-fmt_text, f_izy-fmt_text, f_izp-fmt_text, f_abs-fmt_text
+    .byte f_abx-fmt_text, f_aby-fmt_text, f_ind-fmt_text, f_iax-fmt_text, f_rel-fmt_text
+    .byte f_zpr-fmt_text, f_none-fmt_text, f_none-fmt_text, f_none-fmt_text
+.assert "mode_fmt has every mode", * - mode_fmt, OP_MODES
 
 code_end:
-.assert "code ends before the data area", code_end <= $5c00, true
 
 
 /* ---------------------------------------------------------------------------------------
-Data ($5c00-$5fff, not saved in the prg)
+Data in debugger_scratch ($6e00-$71ff)
 */
-.segment Vars
+*= debugger_scratch "debugger scratch" virtual
+session_all:                                        // checked when b continues a session
 user_screen:    .fill 512, 0                        // user's text screen while the debugger shows its own
-user_zp:        .fill $50, 0                        // user's copy of the swapped zero page bytes
-tramp:          .fill 12, 0                         // single-step trampoline
-line:           .fill 32, 0
-bp_lo:          .fill NUM_BPS+1, 0
-bp_hi:          .fill NUM_BPS+1, 0
-bp_save:        .fill NUM_BPS+1, 0
-bp_on:          .fill NUM_BPS+1, 0
-line_lo:        .fill ROWS, 0
-line_hi:        .fill ROWS, 0
 reg_pc:         .word 0
 reg_a:          .byte 0                             // reg_a, reg_x, reg_y, reg_p, reg_s: same order as reg_names
 reg_x:          .byte 0
@@ -1905,14 +2051,22 @@ reg_y:          .byte 0
 reg_p:          .byte 0
 reg_s:          .byte 0
 user_mode:      .byte 0
-dbg_s:          .byte 0
-taken:          .byte 0
-npc:            .word 0
-btarget:        .word 0
+session:                                            // also checked after the user's code runs
+bp_lo:          .fill NUM_BPS+1, 0                  // bp_lo, bp_hi, bp_save, bp_on: copied to BP_SHADOW
+bp_hi:          .fill NUM_BPS+1, 0
+bp_save:        .fill NUM_BPS+1, 0
+bp_on:          .fill NUM_BPS+1, 0
 view:           .byte 0                             // 0 = code, 1 = hex
 cur:            .word 0
 top:            .word 0
 htop:           .word 0
+session_end:
+line:           .fill 32, 0
+line_lo:        .fill ROWS, 0
+line_hi:        .fill ROWS, 0
+mode:           .byte 0
+len:            .byte 0
+taken:          .byte 0
 after:          .word 0
 pending:        .byte 0
 nib:            .byte 0
@@ -1924,11 +2078,13 @@ ncount:         .byte 0
 lp:             .byte 0
 inv:            .byte 0
 row_i:          .byte 0
-kbw_before:     .byte 0
-stop_reason:    .byte 0
 target:         .word 0
 prevd:          .word 0
 back:           .byte 0
-vars_end:
+scratch_end:
 .assert "user_screen is page aligned", <user_screen, 0
-.assert "data fits below $6000", vars_end <= $6000, true
+.assert "breakpoint table layout", bp_on + NUM_BPS + 1 - bp_lo, BP_BYTES
+.assert "debugger data fits in debugger_scratch", scratch_end <= debugger_scratch + $400, true
+.assert "debugger stack clears the breakpoint copy", BP_SHADOW + BP_BYTES <= $0100 + DBG_S - 32, true
+
+*= code_end "kit-os"

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Usage: ./test-wifi.sh [KickAss.jar] [kit-emu directory]
+set -eu
+
+test_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+kickass=${1:-$test_dir/../../../KickAss.jar}
+case $kickass in /*) ;; *) kickass=$PWD/$kickass ;; esac
+emulator_dir=$(CDPATH= cd -- "${2:-$test_dir/../../../../kit-emu}" && pwd)
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/kit-os-wifi-tests.XXXXXX")
+trap 'rm -rf "$build_dir"' EXIT
+trap 'exit 1' HUP INT TERM
+
+cd "$test_dir/.."
+java -jar "$kickass" -libdir ../../lib -binfile kit_os.asm > "$build_dir/kickass.log" || { cat "$build_dir/kickass.log"; exit 1; }
+mkdir "$build_dir/classes" "$build_dir/run"
+javac -nowarn -d "$build_dir/classes" "$emulator_dir"/*.java "$test_dir/WifiTest.java"
+
+# The emulator reads kit_os.bin, ssd.bin, and character-set.png from its working directory.
+cp kit_os.bin "$emulator_dir/ssd.bin" "$emulator_dir/character-set.png" "$build_dir/run"
+cd "$build_dir/run"
+java -ea -Djava.awt.headless=true -cp "$build_dir/classes" WifiTest "$test_dir/../kit_os.sym"

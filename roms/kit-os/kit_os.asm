@@ -15,6 +15,15 @@
 .label text_buffer_end = $021e                            
 .label zp_reg_stash = $0220                         // 16 bytes
 .label irq_addr_stash = $0230                       // 2 bytes
+                                                    // $0232-$023f: Wi-Fi card (see wifi.lib)
+.label mini_asm_ram = $0240                         // $0240-$024f: mini-asm state kept between runs
+.label debugger_ram = $0250                         // $0250-$025f: debugger state kept between runs
+
+// Scratch for built-in apps, in video RAM past the text screen. Only safe in text mode.
+.label files_scratch = $6200                        // $6200-$6bff: file manager
+.label mini_asm_scratch = $6c00                     // $6c00-$6dff: mini-asm
+.label debugger_scratch = $6e00                     // $6e00-$71ff: debugger
+                                                    // $7200-$75ff: debugger's sector copy (with $6200-$6dff) during an SSD patch
 
 
 // RAM labels
@@ -42,6 +51,12 @@ jump_table:
 #import "vid_cg3.lib"
 #import "ssd.lib"
 #import "sid.lib"
+#import "wifi.lib"
+
+#import "files.asm"
+#import "opcodes.asm"
+#import "mini_asm.asm"
+#import "debugger.asm"
 
 #if !PCB
     #import "lcd.lib"
@@ -102,6 +117,7 @@ start_mon:
     // jsr vid.shift_up_1_clear_bottom
     jsr reset_prompt
     jsr kb.init
+    jsr wifi.init
 
 mon_loop:
     jsr kb.get_press
@@ -109,8 +125,16 @@ mon_loop:
 
     ldy #0
     blink_cursor #vid.CURSOR_ON : (zp.txt_ptr),y
-    
-    jmp mon_loop                        
+
+    lda zp.txt_ptr                                  // with nothing typed at the prompt,
+    cmp #<text_buffer
+    bne mon_loop
+    lda text_buffer
+    cmp #'!'
+    bcs mon_loop
+    jsr wifi.upload_waiting                         // load a program uploaded over Wi-Fi
+    bcc mon_loop
+    jmp wifi_load_command
 
 
 key_pressed:
@@ -195,30 +219,30 @@ not_load:
     jmp exit_command
 not_exit:
 
-    cmp #'d'
-    bne not_dir
-    jmp dir_command
-not_dir:
-
-    cmp #'e'
-    bne not_erase
-    jmp erase_command
-not_erase:
-
     cmp #'f'
     bne not_file
     jmp file_command
 not_file:
 
-    cmp #'c'
-    bne not_set_sector
-    jmp set_sector_command
-not_set_sector:
+    cmp #'a'
+    bne not_assemble
+    jmp assemble_command
+not_assemble:
+
+    cmp #'b'
+    bne not_debug
+    jmp debug_command
+not_debug:
 
     cmp #'h'
     bne not_help
     jmp help_command
 not_help:
+
+    cmp #'t'
+    bne not_terminal
+    jmp terminal_command
+not_terminal:
 
 enter_reset:
     jsr reset_prompt
@@ -452,28 +476,7 @@ load_command:
     uart_read_2(zp.mon_addr)                        // read start addr into mon_addr
     uart_read_2(zp.K)                               // read load addr into zp.K,J
 
-    set_vid_ptr(14, 0)
-
-    vid_write_string("A") 
-    lda zp.mon_addr+1
-    jsr vid.write_hex
-    lda zp.mon_addr
-    jsr vid.write_hex                          
-    inc zp.vid_ptr                         
-
-
-    vid_write_string("B")                           
-    lda zp.mon_arg1+1
-    jsr vid.write_hex
-    lda zp.mon_arg1
-    jsr vid.write_hex  
-    inc zp.vid_ptr       
-
-    vid_write_string("C") 
-    lda zp.E
-    jsr vid.write_hex
-    lda zp.F
-    jsr vid.write_hex    
+    jsr print_load_header
 
     uart_read_n_with_checksum(zp.mon_arg1, zp.K, zp.G)     // read n bytes and save checksum at zp.G,H
 
@@ -485,6 +488,7 @@ load_command:
     jsr uart.write_byte
     jsr vid.write_hex
 
+load_done:
     set_vid_ptr(15, 0)
     vid_write_string("done! Run, Save, or Cancel?")
 
@@ -502,7 +506,7 @@ dont_run:
 
     cmp #'s'
     bne dont_save
-    jsr save_to_ssd
+    jsr files.save
 dont_save:
 
 
@@ -510,79 +514,136 @@ dont_save:
 
 
 /*
-Save the file loaded over UART to SSD
-*/ 
-save_to_ssd:
-    jsr set_sector_prompt
+Show a load's start address (A), size (B), and expected checksum (C) on row 14
+*/
+print_load_header:
+    set_vid_ptr(14, 0)
 
-    jsr vid.shift_up_1_clear_bottom
-    vid_write_string("filename: ")
+    vid_write_string("A")
+    lda zp.mon_addr+1
+    jsr vid.write_hex
+    lda zp.mon_addr
+    jsr vid.write_hex
+    inc zp.vid_ptr
 
-    jsr clear_text_buffer
-    ldy #0
+    vid_write_string("B")
+    lda zp.mon_arg1+1
+    jsr vid.write_hex
+    lda zp.mon_arg1
+    jsr vid.write_hex
+    inc zp.vid_ptr
 
-fname_loop:
-    jsr kb.get_press
-    beq fname_loop
-
-    cmp #kb.ASCII_NEWLINE
-    beq fname_done
-
-    sta text_buffer,y
-    jsr vid.write_ascii
-    inc_vid_ptr()
-    iny
-    cpy #16
-    bcc fname_loop
-fname_done:
-
-    jsr vid.shift_up_1_clear_bottom
-    ssd_save_file(zp.mon_addr, zp.K, zp.mon_arg1, zp.G, text_buffer, zp.I, zp.J)
-
-    jsr vid.shift_up_1
-
-    jmp enter_reset
-
-wait_loop:
-    jsr kb.get_press
-    beq wait_loop
-
-    rts
-
-set_sector_prompt:
-    jsr vid.shift_up_1_clear_bottom
-    vid_write_string("sector (hex 00-39): ")
-    
-get_sector_nibble1_loop:
-    jsr kb.get_press
-    beq get_sector_nibble1_loop
-
-    sta text_buffer
-    jsr vid.write_ascii
-
-    inc_vid_ptr()
-
-get_sector_nibble2_loop:
-    jsr kb.get_press
-    beq get_sector_nibble2_loop
-
-    sta text_buffer+1
-    jsr vid.write_ascii
-    inc_vid_ptr()
-
-    ldy #0
-    jsr parse_hex_byte
-    jsr ssd.set_sector
-
+    vid_write_string("C")
+    lda zp.E
+    jsr vid.write_hex
+    lda zp.F
+    jsr vid.write_hex
     rts
 
 
 /*
+Wi-Fi load
+Loads the program waiting on the Wi-Fi card, then asks to run, save, or cancel like l
+*/
+.macro jcs(target) {
+    bcc skip
+    jmp target
+skip:
+}
+
+wifi_load_command:
+    ldy #0
+    lda (zp.txt_ptr),y                              // hide the cursor
+    jsr vid.write_ascii
+
+    shift_vid_up(2, 0)
+    fill_vid_row(14, ' ')
+    fill_vid_row(15, ' ')
+    set_vid_ptr(15, 0)
+    vid_write_string("loading over wifi")
+
+    jsr wifi.request_program
+    jcs(wifi_load_failed)
+
+    ldx #0
+wifi_header_loop:                                   // read the header into the same places as l
+    jsr wifi.read_data
+    jcs(wifi_load_failed)
+    ldy wifi_header_targets,x
+    sta $0000,y
+    inx
+    cpx #10
+    bne wifi_header_loop
+
+    jsr print_load_header
+
+    wifi_read_n_with_checksum(zp.mon_arg1, zp.K, zp.G)
+    jcs(wifi_load_failed)
+
+    lda zp.G
+    ldx zp.G+1
+    jsr wifi.send_result
+
+    vid_write_string("=")
+    lda zp.G
+    jsr vid.write_hex
+    lda zp.G+1
+    jsr vid.write_hex
+
+    lda zp.G
+    cmp zp.E
+    bne wifi_checksum_error
+    lda zp.G+1
+    cmp zp.F
+    bne wifi_checksum_error
+
+    sei
+    lda zp.kb_write_ptr
+    sta zp.kb_read_ptr                              // drop keys typed during the load
+    cli
+    jmp load_done
+
+wifi_checksum_error:
+    jsr vid.shift_up_1
+    fill_vid_row(14, ' ')
+    set_vid_ptr(14, 0)
+    vid_write_string("checksum error")
+    jmp enter_reset
+
+wifi_load_failed:
+    jsr vid.shift_up_1
+    fill_vid_row(14, ' ')
+    set_vid_ptr(14, 0)
+    vid_write_string("wifi load failed")
+    jmp enter_reset
+
+wifi_header_targets:
+    .byte zp.I, zp.J                                // file type, video mode
+    .byte zp.mon_arg1, zp.mon_arg1+1                // size
+    .byte zp.E, zp.F                                // checksum
+    .byte zp.mon_addr, zp.mon_addr+1                // start address
+    .byte zp.K, zp.K+1                              // load address
+
+
+/*
+Terminal command
+Talks to the Wi-Fi card's console until esc
+*/
+terminal_command:
+    jsr wifi.terminal
+    bcs no_wifi_card
+    jmp app_exit
+no_wifi_card:
+    vid_write_string("no wifi card in slot 3")
+    jmp enter_reset
+
+
+/*
 File command
-Loads the contents of file given as hex argument
+With no argument, opens the file manager. With a sector, runs or shows the file there.
 */
 file_command: 
-    consume_spaces(file_done)
+    consume_spaces(file_manager)
     jsr parse_hex_byte
 
     jsr ssd.set_sector
@@ -621,117 +682,62 @@ wait_for_esc:
 file_done:
     jmp enter_reset
 
-
-
+file_manager:
+    jmp files.start
 
 
 /*
-Dir command
-Lists all files stored on the SSD
+Assemble command: a (addr)
+Starts mini-asm at addr, or where it left off
 */
-dir_command:
-    consume_spaces(dir_zero)
+assemble_command:
+    consume_spaces(assemble_no_addr)
+    jsr parse_addr
+    sec
+    jmp mini_asm.start
+assemble_no_addr:
+    clc
+    jmp mini_asm.start
+
+
+/*
+Debug command: b (addr)
+Starts the debugger with the PC at addr, or where it left off
+*/
+debug_command:
+    consume_spaces(debug_no_addr)
+    jsr parse_addr
+    sec
+    jmp debugger.start
+debug_no_addr:
+    clc
+    jmp debugger.start
+
+
+/*
+Parse a 4-digit hex address at text_buffer,y into zp.mon_addr
+*/
+parse_addr:
     jsr parse_hex_byte
-    tax
-    jmp display_dir
-dir_zero:
-    ldx #0
-display_dir:
-
-    fill_vid_screen(' ')
-    set_vid_ptr(0, 0)
-
-    mov2 #ssd.file_name_addr : zp.B
-
-    ldy #0
-sector_loop:
-    jsr vid.set_row
-    txa
-    jsr ssd.set_sector
-    jsr vid.write_hex
-    inc_vid_ptr()
-
-    lda ssd.START_ADDR
-    bne empty_sector
-
-    lda ssd.file_type_addr
-
-    cmp #ssd.IMAGE
-    bne write_p
-    lda #'I' 
-    jsr vid.write_ascii
-    jmp write_fname
-
-write_p:
-    lda #'P' 
-    jsr vid.write_ascii
-
-write_fname:
-    inc_vid_ptr()
-    inc_vid_ptr()
-    jsr vid.write_string
-    jmp next_sector 
-
-empty_sector:
-    lda #'E' 
-    jsr vid.write_ascii
-next_sector:
-    inx
-    cpx #64
-    bcs dir_done
+    sta zp.mon_addr+1
     iny
-    cpy #15
-    bne sector_loop
-
-dir_done:
-    jmp enter_reset
-
-
-set_sector_command:
-    consume_spaces(file_done)
     jsr parse_hex_byte
-    jsr ssd.set_sector
-
-    vid_write_string("loaded sector ")
-
-    lda zp.ssd_sector
-    jsr vid.write_hex
-
-
-    jmp enter_reset
-
+    sta zp.mon_addr
+    rts
 
 
 /*
-Erase command
-Erases current sector of SSD
+Return to the prompt from a built-in app, in text mode with a clear screen.
+Apps jump here with the stack as it was when the app started.
 */
-erase_command:
-    consume_spaces(file_done)
-    jsr parse_hex_byte
-    jsr ssd.set_sector
-
-    vid_write_string("confirm erase Y/N ")
-
-erase_confirm:
-    jsr kb.get_press
-    beq erase_confirm
-    cmp #'y'
-    beq do_erase
+app_exit:
+    set_vid_mode_text()
+    fill_vid_screen(' ')
     jmp enter_reset
 
-do_erase:
-    jsr ssd.erase_sector
 
-    fill_vid_row(15, ' ')
-    set_vid_ptr(15, 0)
 
-    vid_write_string("erased ")
-    lda zp.ssd_sector
-    jsr vid.write_hex
-    jsr vid.shift_up_1
 
-    jmp enter_reset
 
 /*
 Exit command
@@ -760,10 +766,10 @@ help_command:
         "Status of registers",
         "Update (pc p a x y s)",
         "Load over uart",
-        "Change (sector)",
-        "Directory (sector)",
-        "Erase (sector)",
-        "File run (sector)",
+        "File manager, or run (sector)",
+        "Assembler (addr)",
+        "deBugger (addr)",
+        "Terminal (wifi card)",
         "Help",
         "eXit monitor"
     )
@@ -1046,7 +1052,7 @@ restore_zp_registers:
 }
 
 
-break:
+_break:
     phy
     // Now stack has R_HI, R_LO, P, X, A, Y <
     jmp start_mon
@@ -1059,7 +1065,7 @@ irq:
     inx                                                     // increment X twice so it points to the processor flags
     lda $100,x                                              // load the processor flags on the stack
     and #$10                                                // check for brk
-    bne break                                               // if break bit is set, go to break handler
+    bne _break                                              // if break bit is set, go to break handler
     phy
        
     lda via.IFR
@@ -1111,6 +1117,14 @@ no_timer1_irq:
 
 raw_irq:
     jmp (zp.irq_addr)
+
+
+/* ---------------------------------------------------------------------------------------
+Public entry points at fixed addresses (see api.lib)
+*/
+*=api.KIT_OS "kit-os API"
+break:      jmp _break                              // enter the monitor from an IRQ handler (stack: P, PC, X, A)
+api_check("kit-os", api.KIT_OS, ($fffa - api.KIT_OS) / 3)
 
 
 *=$fffc                                             // the CPU reads address $fffc to read start of program address

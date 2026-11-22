@@ -2,7 +2,7 @@
 .encoding "ascii"
 .filenamespace test0
 
-#import "video_mon.sym"
+#import "kit_os.sym"
 
 #define MACROS_ONLY
 #import "../../lib/macros.lib"

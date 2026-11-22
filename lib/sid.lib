@@ -6,6 +6,7 @@
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "via.lib"
 #import "zp.lib"
 #import "macros.lib"
@@ -36,7 +37,7 @@
 .label rand = $7e1b
 
 
-setup_voice1_registers: {
+_setup_voice1_registers: {
     pha
     mov2 #voice1_freq : zp.sid_freq_addr
     mov2 #voice1_pw : zp.sid_pw_addr
@@ -47,7 +48,7 @@ setup_voice1_registers: {
     rts
 }
 
-setup_voice2_registers: {
+_setup_voice2_registers: {
     pha
     mov2 #voice2_freq : zp.sid_freq_addr
     mov2 #voice2_pw : zp.sid_pw_addr
@@ -58,7 +59,7 @@ setup_voice2_registers: {
     rts
 }
 
-setup_voice3_registers: {
+_setup_voice3_registers: {
     pha
     mov2 #voice3_freq : zp.sid_freq_addr
     mov2 #voice3_pw : zp.sid_pw_addr
@@ -73,7 +74,7 @@ setup_voice3_registers: {
 /**
 * Set up voice registers for the voice in X (0 = voice 1, 1 = voice 2, 2 = voice 3)
 */
-setup_voice_registers: {
+_setup_voice_registers: {
     cpx #0
     bne not_0
     jsr setup_voice1_registers
@@ -88,6 +89,20 @@ not_1:
 done:
     rts
 }
+
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var sid_api_resume = *
+* = api.SID "sid API"
+setup_voice1_registers: jmp _setup_voice1_registers
+setup_voice2_registers: jmp _setup_voice2_registers
+setup_voice3_registers: jmp _setup_voice3_registers
+setup_voice_registers:  jmp _setup_voice_registers
+api_check("sid", api.SID, 16)
+* = sid_api_resume
 
 #endif
 

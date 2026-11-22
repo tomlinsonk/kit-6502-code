@@ -10,7 +10,7 @@
    Keys:  up/down pick   return play   left/right subtune
           space stop/start   esc quit
 
-   Assemble:  ka -libdir ../../roms/video-mon sid_play.asm
+   Assemble:  ka -libdir ../../roms/kit-os sid_play.asm
 
    How it plays a tune:
      - Tunes live in $0300-$4fff; this program lives in $5000-$5fff.
@@ -36,7 +36,7 @@
 #import "../../lib/vid.lib"
 #import "../../lib/kb.lib"
 
-#import "video_mon.sym"
+#import "kit_os.sym"
 
 
 .label SID = $7e00

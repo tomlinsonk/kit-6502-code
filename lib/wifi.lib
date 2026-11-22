@@ -1,0 +1,464 @@
+#importonce
+.filenamespace wifi
+
+.cpu _65c02
+.encoding "ascii"
+
+/*
+Wi-Fi card in slot 3: a TL16C550C UART at $7c00, connected to an ESP32-C3 at 38400 baud
+with RTS/CTS flow control.
+
+The card keeps a program uploaded over Wi-Fi until the KiT asks for it. Requests from the
+KiT are bytes >= $f0. Terminal text in both directions is ASCII (< $80).
+
+Request              Reply
+POLL         $f0     $f9 if a program is waiting, otherwise $f8
+GET          $f1     $fa, a 10-byte header, then the data; or $fb if no program is waiting
+TERMINAL_ON  $f2     none; the card's console now talks to the KiT
+TERMINAL_OFF $f3     none
+RESULT       $f4     none; followed by the checksum the KiT computed (2 bytes)
+
+The header is the same as for loading over the serial port: file type, video mode,
+size (2), checksum (2), start address (2), load address (2).
+*/
+
+#if !MACROS_ONLY
+
+#import "api.lib"
+#import "zp.lib"
+#import "macros.lib"
+#import "vid.lib"
+#import "kb.lib"
+
+// UART registers
+.label RBR = $7c00                                  // receiver buffer register (read only)
+.label THR = $7c00                                  // transmitter holding register (write only)
+.label DLL = $7c00                                  // divisor latch LSB (if DLAB=1)
+.label DLM = $7c01                                  // divisor latch MSB (if DLAB=1)
+.label IER = $7c01                                  // interrupt enable register
+.label FCR = $7c02                                  // FIFO control register
+.label LCR = $7c03                                  // line control register
+.label MCR = $7c04                                  // modem control register
+.label LSR = $7c05                                  // line status register
+.label SCR = $7c07                                  // scratch register
+
+.label DLAB = %10000000
+.label LCR_8N1 = %00000011
+.label FIFO_RESET_TRIGGER_8 = %10000111             // enable and clear FIFOs, receive trigger at 8 bytes
+.label AUTO_FLOW = %00100010                        // auto-RTS and auto-CTS
+.label DATA_READY = %00000001
+.label THR_EMPTY = %00100000
+.label DIV_38400 = 3                                // 1.8432 MHz / (16 * 38400)
+
+// Requests
+.label POLL = $f0
+.label GET = $f1
+.label TERMINAL_ON = $f2
+.label TERMINAL_OFF = $f3
+.label RESULT = $f4
+
+// Replies
+.label REPLY = $f0                                  // replies are >= $f0
+.label NOTHING_WAITING = $f8
+.label PROGRAM_WAITING = $f9
+.label PROGRAM = $fa
+.label NO_PROGRAM = $fb
+
+// Timeouts, in units of about 1.8 ms (0 means 256)
+.label SEND_TIMEOUT = 40
+.label POLL_TIMEOUT = 20
+.label DATA_TIMEOUT = 0
+
+.label POLL_TICKS = 8                               // poll about every 280 ms (cursor blink ticks)
+
+// RAM ($0232-$023f, reserved by kit-os)
+.label present = $0232                              // nonzero if a card is in slot 3
+.label last_poll = $0233                            // zp.cursor_blink_count at the last poll
+.label under_cursor = $0234                         // screen byte under the terminal cursor
+
+.label SCREEN_END_HI = >(vid.VRAM_START + 512)      // hi byte of the address just past the text screen
+
+
+/* ---------------------------------------------------------------------------------------
+Look for the card and set up its UART. Sets present.
+*/
+_init:
+    pha
+    stz present
+
+    lda #$5a                                        // an empty slot doesn't keep what's written
+    sta SCR
+    cmp SCR
+    bne init_done
+    lda #$a5
+    sta SCR
+    cmp SCR
+    bne init_done
+
+    lda #DLAB
+    sta LCR                                         // set the divisor latch access bit
+    lda #DIV_38400
+    sta DLL
+    stz DLM
+    lda #LCR_8N1
+    sta LCR                                         // 8n1, clear DLAB
+    lda #FIFO_RESET_TRIGGER_8
+    sta FCR
+    stz IER                                         // polled mode
+    lda #AUTO_FLOW
+    sta MCR
+    lda LSR                                         // clear any stale error flags
+
+    dec present
+    lda zp.cursor_blink_count
+    sta last_poll
+
+    lda #TERMINAL_OFF                               // in case the KiT reset during the terminal
+    jsr _send_byte
+
+init_done:
+    pla
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Send the byte in A. Carry set if the card didn't take it in time.
+*/
+_send_byte:
+    phx
+    phy
+    pha
+    ldx #0
+    ldy #SEND_TIMEOUT
+send_wait:
+    lda LSR
+    and #THR_EMPTY
+    bne send_ready
+    dex
+    bne send_wait
+    dey
+    bne send_wait
+    pla
+    ply
+    plx
+    sec
+    rts
+send_ready:
+    pla
+    sta THR
+    ply
+    plx
+    clc
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Read a byte into A, waiting up to Y * 1.8 ms (Y = 0: 460 ms). Clobbers Y.
+Carry set on timeout.
+*/
+_read_byte:
+    phx
+    ldx #0
+read_wait:
+    lda LSR
+    lsr                                             // data ready into carry
+    bcs read_ready
+    dex
+    bne read_wait
+    dey
+    bne read_wait
+    plx
+    sec
+    rts
+read_ready:
+    lda RBR
+    plx
+    clc
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Read a program byte into A, with a long timeout. Carry set on timeout.
+*/
+read_data:
+    phy
+    ldy #DATA_TIMEOUT
+    jsr _read_byte
+    ply
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Discard everything waiting in the receive FIFO
+*/
+drain:
+    pha
+drain_loop:
+    lda LSR
+    lsr
+    bcc drain_done
+    lda RBR
+    bra drain_loop
+drain_done:
+    pla
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Wait up to Y * 1.8 ms for each byte until a reply (>= $f0) arrives, skipping terminal text.
+Reply in A. Carry set on timeout.
+*/
+read_reply:
+    sty zp.B
+read_reply_loop:
+    ldy zp.B
+    jsr _read_byte
+    bcs read_reply_done
+    cmp #REPLY
+    bcc read_reply_loop
+    clc
+read_reply_done:
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Ask the card whether a program is waiting, at most every POLL_TICKS cursor ticks.
+Carry set if one is. Uses zp.B.
+*/
+upload_waiting:
+    lda present
+    beq not_waiting
+
+    lda zp.cursor_blink_count
+    sec
+    sbc last_poll
+    cmp #POLL_TICKS
+    bcc not_waiting
+    lda zp.cursor_blink_count
+    sta last_poll
+
+    jsr drain
+    lda #POLL
+    jsr _send_byte
+    bcs not_waiting
+    ldy #POLL_TIMEOUT
+    jsr read_reply
+    bcs not_waiting
+    cmp #PROGRAM_WAITING
+    bne not_waiting
+    sec
+    rts
+not_waiting:
+    clc
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Ask the card for its program. Carry clear if it's coming: read the header and data next
+with read_data. Uses zp.B.
+*/
+request_program:
+    jsr drain
+    lda #GET
+    jsr _send_byte
+    bcs request_done
+    ldy #DATA_TIMEOUT
+    jsr read_reply
+    bcs request_done
+    cmp #PROGRAM
+    bne request_failed
+    clc
+    rts
+request_failed:
+    sec
+request_done:
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Tell the card the checksum the KiT computed: sum1 in A, sum2 in X
+*/
+send_result:
+    pha
+    lda #RESULT
+    jsr _send_byte
+    pla
+    jsr _send_byte
+    txa
+    jmp _send_byte
+
+
+/* ---------------------------------------------------------------------------------------
+Talk to the card's console until esc is pressed. Carry set if there's no card.
+Clears the screen.
+*/
+terminal:
+    lda present
+    bne terminal_start
+    sec
+    rts
+
+terminal_start:
+    jsr vid.blank_screen
+    set_vid_ptr(0, 0)
+    vid_write_string("wifi terminal. esc to exit")
+    set_vid_ptr(1, 0)
+
+    lda #TERMINAL_ON                                // the card redraws its prompt
+    jsr _send_byte
+    jsr show_cursor
+
+terminal_loop:
+    lda LSR
+    lsr
+    bcc terminal_keys
+    jsr hide_cursor
+    lda RBR
+    jsr put_char
+    jsr show_cursor
+
+terminal_keys:
+    jsr kb.get_press
+    beq terminal_loop
+    bmi terminal_loop                               // ignore arrow, function, and unknown keys
+    cmp #kb.ASCII_ESC
+    beq terminal_exit
+    jsr _send_byte
+    bra terminal_loop
+
+terminal_exit:
+    lda #TERMINAL_OFF
+    jsr _send_byte
+    clc
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Show the byte in A at the video pointer. Handles newline, backspace, and tab, and ignores
+carriage return and other non-printing bytes. Scrolls past the bottom of the screen.
+*/
+put_char:
+    cmp #kb.ASCII_NEWLINE
+    beq newline
+    cmp #kb.ASCII_BACKSPACE
+    beq backspace
+    cmp #kb.ASCII_TAB
+    bne not_tab
+    lda #' '
+not_tab:
+    cmp #' '
+    bcc put_char_done                               // ignore other control characters
+    cmp #$7f
+    bcs put_char_done                               // ignore delete, replies, and non-ASCII bytes
+
+    jsr vid.write_ascii
+    inc zp.vid_ptr
+    bne put_char_done
+    inc zp.vid_ptr+1
+    lda zp.vid_ptr+1
+    cmp #SCREEN_END_HI
+    bne put_char_done
+    jmp vid.shift_up_1_clear_bottom                 // scroll; leaves the pointer at the bottom row
+
+put_char_done:
+    rts
+
+newline:
+    lda zp.vid_ptr
+    and #%11100000                                  // go to the start of the row
+    clc
+    adc #32                                         // then to the next row
+    sta zp.vid_ptr
+    bcc put_char_done
+    inc zp.vid_ptr+1
+    lda zp.vid_ptr+1
+    cmp #SCREEN_END_HI
+    bne put_char_done
+    jmp vid.shift_up_1_clear_bottom
+
+backspace:
+    lda zp.vid_ptr
+    bne backspace_lo
+    lda zp.vid_ptr+1
+    cmp #>vid.VRAM_START
+    beq put_char_done                               // already at the top left
+    dec zp.vid_ptr+1
+backspace_lo:
+    dec zp.vid_ptr
+    rts
+
+
+show_cursor:
+    lda (zp.vid_ptr)
+    sta under_cursor
+    lda #vid.CURSOR_ON
+    jmp vid.write_ascii
+
+hide_cursor:
+    lda under_cursor
+    sta (zp.vid_ptr)
+    rts
+
+
+/* ---------------------------------------------------------------------------------------
+Public entry points at fixed addresses (see api.lib)
+*/
+.var wifi_api_resume = *
+* = api.WIFI "wifi API"
+init:      jmp _init                                // look for the card; sets wifi.present
+send_byte: jmp _send_byte                           // send A; carry set on timeout
+read_byte: jmp _read_byte                           // read into A, waiting up to Y * 1.8 ms; carry set on timeout
+api_check("wifi", api.WIFI, 16)
+* = wifi_api_resume
+
+#endif
+
+
+/* ---------------------------------------------------------------------------------------
+Read (n_addr) program bytes from the card into (target_addr)... and compute their
+Fletcher checksum into checksum_addr, checksum_addr+1. Carry set on timeout.
+Clobbers A, zp.B, C, D.
+*/
+.macro @wifi_read_n_with_checksum(n_addr, target_addr, checksum_addr) {
+    phx
+    phy
+
+    stz checksum_addr
+    stz checksum_addr+1
+
+    ldx #0                                          // bytes read, low byte
+    stz zp.B                                        // bytes read, high byte
+    ldy #0
+    mov2 target_addr : zp.C
+
+loop:
+    jsr wifi.read_data
+    bcs done
+    sta (zp.C),y
+
+    clc
+    adc checksum_addr
+    sta checksum_addr
+    clc
+    adc checksum_addr+1
+    sta checksum_addr+1
+
+    inc zp.C
+    bne no_carry
+    inc zp.C+1
+no_carry:
+    inx
+    bne no_x_carry
+    inc zp.B
+no_x_carry:
+    cpx n_addr
+    bne loop
+    lda zp.B
+    cmp n_addr+1
+    bcc loop
+    clc
+
+done:
+    ply
+    plx
+}

@@ -41,6 +41,7 @@ $20: data
 
 #if !MACROS_ONLY
 
+#import "api.lib"
 #import "zp.lib"
 #import "via.lib"
 #import "vid.lib"
@@ -73,7 +74,7 @@ $20: data
  * Erase the current sector stored in zp.ssd_sector
  * Blocks until the erase is complete
  */
-erase_sector:
+_erase_sector:
     pha                                                 
 
     lda #$ff
@@ -127,7 +128,7 @@ wait_for_clear:
  * Write the byte stored in A to the current sector (zp.ssd_sector)
  * at the address stored in zp.ssd_write_addr
  */ 
-write_byte:
+_write_byte:
     phy
     ssd_write_byte()
     ply
@@ -138,7 +139,7 @@ write_byte:
 Set SSD sector to value stored in A
 (if A >= 64, does nothing)
 */
-set_sector: {
+_set_sector: {
     cmp #64
     bcs done
 
@@ -159,7 +160,7 @@ Load the file in the current sector into RAM
 Clears carry bit if successful, set carry bit if unsuccessful
 Leaves the file's first sector selected, so its header can be read afterward
 */
-load_file: {
+_load_file: {
     pha
     phy
     phx
@@ -236,6 +237,20 @@ load_done:
 
 
  
+
+
+/* --------------------------------------------------------------------------------------- 
+Public entry points at fixed addresses (see api.lib)
+*/
+.var ssd_api_resume = *
+* = api.SSD "ssd API"
+erase_sector: jmp _erase_sector
+write_byte:   jmp _write_byte
+set_sector:   jmp _set_sector
+load_file:    jmp _load_file
+api_check("ssd", api.SSD, 16)
+* = ssd_api_resume
+
 #endif
 
 
