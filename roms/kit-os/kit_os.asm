@@ -229,7 +229,7 @@ not_file:
     jmp assemble_command
 not_assemble:
 
-    cmp #'b'
+    cmp #'d'
     bne not_debug
     jmp debug_command
 not_debug:
@@ -701,7 +701,7 @@ assemble_no_addr:
 
 
 /*
-Debug command: b (addr)
+Debug command: d (addr)
 Starts the debugger with the PC at addr, or where it left off
 */
 debug_command:
@@ -768,7 +768,7 @@ help_command:
         "Load over uart",
         "File manager, or run (sector)",
         "Assembler (addr)",
-        "deBugger (addr)",
+        "Debugger (addr)",
         "Terminal (wifi card)",
         "Help",
         "eXit monitor"

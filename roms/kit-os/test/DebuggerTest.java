@@ -173,9 +173,9 @@ public class DebuggerTest {
         until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "monitor command " + text);
     }
 
-    // Start the debugger with b from the monitor prompt
+    // Start the debugger with d from the monitor prompt
     private void debug(String args) {
-        monitor("b" + args + "\n");
+        monitor("d" + args + "\n");
         idle();
         require(cpu.getPC() == sym("key_loop"), "debugger started");
     }
@@ -720,7 +720,7 @@ public class DebuggerTest {
         until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "brk back to the monitor");
         equal(peek(0x3101), 0x77, "the program sees the user's zero page");
         equal(peek(0x3100), 0x5a, "the program ran");
-        debug("");                                  // b continues from the program's brk
+        debug("");                                  // d continues from the program's brk
         equal(word("reg_pc"), 0x300c, "pc after the program's brk");
         equal(var("reg_a"), 0x5a, "a from the program");
         equal(var("reg_s"), 0xff, "s after brk");
@@ -784,7 +784,7 @@ public class DebuggerTest {
         until(() -> kbEmpty() && cpu.getPC() == sym("mon_loop"), "brk to the monitor during g");
         equal(peek(0x410a), 0x00, "breakpoint still in memory");
         debug("");
-        equal(peek(0x410a), 0xea, "b removes the breakpoints of an unfinished run");
+        equal(peek(0x410a), 0xea, "d removes the breakpoints of an unfinished run");
         equal(word("reg_pc"), 0x410a, "pc from the monitor");
         contains(row(2), ">* 410a ea       nop");
         System.out.println("unfinished run OK");
@@ -793,7 +793,7 @@ public class DebuggerTest {
     private void testNewSession() {
         leave();
         debug(" 2000");
-        equal(word("reg_pc"), 0x2000, "b with an address");
+        equal(word("reg_pc"), 0x2000, "d with an address");
         contains(row(0), "pc 2000 a 00 x 00 y 00 s ff");
         contains(row(1), "p 20 ");
         equal(var("view"), 0, "code view");
@@ -813,7 +813,7 @@ public class DebuggerTest {
 
     private void run() throws Exception {
         until(() -> cpu.getPC() == sym("mon_loop"), "Monitor boot");
-        monitor("b");
+        monitor("d");
         scan(PS2.getScanCode(KeyEvent.VK_ENTER));  // the release arrives after the debugger starts
         until(() -> cpu.getPC() == sym("key_loop"), "Debugger start");
         scan(0xf0);

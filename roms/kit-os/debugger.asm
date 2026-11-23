@@ -1,7 +1,7 @@
 .filenamespace debugger
 
 /*
-Disassembler, single stepper, and hex editor (b command). See README.md for the keys.
+Disassembler, single stepper, and hex editor (d command). See README.md for the keys.
 
 Memory:
     $00-$0f             scratch (the user's values are in zp_reg_stash, as while the monitor runs)
@@ -1131,7 +1131,7 @@ save_zp:
 
 /* ---------------------------------------------------------------------------------------
 Session state. debugger_scratch is video RAM, so graphics can overwrite it. A checksum in
-debugger_ram checks it after the user's code runs and when b continues a session.
+debugger_ram checks it after the user's code runs and when d continues a session.
 */
 
 // Leave to the monitor with the user's registers on its stack (as if the user's code did a brk)
@@ -2042,7 +2042,7 @@ code_end:
 Data in debugger_scratch ($6e00-$71ff)
 */
 *= debugger_scratch "debugger scratch" virtual
-session_all:                                        // checked when b continues a session
+session_all:                                        // checked when d continues a session
 user_screen:    .fill 512, 0                        // user's text screen while the debugger shows its own
 reg_pc:         .word 0
 reg_a:          .byte 0                             // reg_a, reg_x, reg_y, reg_p, reg_s: same order as reg_names

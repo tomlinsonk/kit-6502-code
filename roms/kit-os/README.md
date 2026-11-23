@@ -31,7 +31,7 @@ Type a command at the `>` prompt and press Enter. Numbers are hex.
 | `f` | File manager |
 | `f 06` | Run (or show) the file in SSD sector `06` |
 | `a`, `a 2000` | Assembler |
-| `b`, `b 1000` | Debugger |
+| `d`, `d 1000` | Debugger |
 | `t` | Wi-Fi card terminal |
 | `h` | Help |
 
@@ -131,13 +131,13 @@ the bytes and the instruction as assembled, and the prompt moves to the next add
 `.s` asks before overwriting a used sector, then asks for a name. Run the saved program with
 `f ss`.
 
-## Debugger (`b`)
+## Debugger (`d`)
 
 A 65C02 disassembler, single stepper, and hex editor.
 
-- `b 1000` starts a new session with the PC at `$1000`, A, X, and Y `00`, P `20`, S `ff`,
+- `d 1000` starts a new session with the PC at `$1000`, A, X, and Y `00`, P `20`, S `ff`,
   and no breakpoints. The monitor's screen becomes the program's screen.
-- `b` continues the last session. If the debugger's memory was overwritten (by graphics or
+- `d` continues the last session. If the debugger's memory was overwritten (by graphics or
   an image), it starts a new session at `$1000`.
 
 ```
@@ -174,7 +174,7 @@ writes a byte, and Backspace cancels a half-typed byte. I/O (`$7800-$7fff`) show
 Writing to `$8000-$8fff` patches the selected SSD sector.
 
 Esc leaves the program's registers on the monitor's stack, as if it had run `brk`: `s` shows
-them, `u` changes them, `x` continues the program, and `b` picks them up again.
+them, `u` changes them, `x` continues the program, and `d` picks them up again.
 
 Limitations:
 
